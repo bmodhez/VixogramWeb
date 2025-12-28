@@ -19,4 +19,6 @@ urlpatterns = [
     path('chat/call/invite/<chatroom_name>', call_invite_view, name='chat-call-invite'),
     path('chat/call/presence/<chatroom_name>', call_presence_view, name='chat-call-presence'),
     path('chat/call/event/<chatroom_name>', call_event_view, name='chat-call-event'),
+    path('chat/message/<int:message_id>/edit/', message_edit_view, name='message-edit'),
+    path('chat/message/<int:message_id>/delete/', message_delete_view, name='message-delete'),
 ]

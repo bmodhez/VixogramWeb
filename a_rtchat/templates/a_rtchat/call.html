@@ -54,6 +54,7 @@
     const callType = "{{ call_type|escapejs }}";
     const channel = "{{ chatroom_name|escapejs }}";
     const callRole = "{{ call_role|escapejs }}";
+    const currentUsername = "{{ user.username|escapejs }}";
     const tokenUrl = "{% url 'agora-token' chatroom_name %}";
     const presenceUrl = "{% url 'chat-call-presence' chatroom_name %}";
     const callEventUrl = "{% url 'chat-call-event' chatroom_name %}";
@@ -98,11 +99,29 @@
     const participants = new Map();
     participants.set('me', 'You');
 
+    const otherUsername = (Array.isArray(memberUsernames) && memberUsernames.length === 2)
+        ? (memberUsernames.find((u) => u && u !== currentUsername) || '')
+        : '';
+
+    function ensureRemoteParticipant(uid) {
+        if (!uid) return;
+        const key = String(uid);
+        if (participants.has(key)) return;
+        // If presence WS missed earlier join events, Agora events still confirm remote presence.
+        // For 1:1 rooms we can reliably map to the "other" username.
+        participants.set(key, otherUsername || `User ${key}`);
+        renderParticipants();
+    }
+
     function renderParticipants() {
         const names = Array.from(participants.values()).filter(Boolean);
         const unique = Array.from(new Set(names));
-        if (countEl) countEl.textContent = String(Math.max(1, unique.length));
-        if (namesEl) namesEl.textContent = unique.length ? unique.join(', ') : 'You';
+        const others = unique.filter((n) => n !== 'You' && n !== currentUsername);
+
+        // Count includes you + others (so it stays 1 when alone).
+        if (countEl) countEl.textContent = String(Math.max(1, 1 + others.length));
+        // Right-side "In call" list should show only other joined users.
+        if (namesEl) namesEl.textContent = others.length ? others.join(', ') : 'Waiting…';
     }
     renderParticipants();
 
@@ -268,12 +287,17 @@
                     const uid = payload.uid;
                     const username = payload.username || '';
                     if (!uid || !username) return;
+
+                    // Ignore our own presence echo so we don't show "You, <myname>".
+                    if (username === currentUsername) return;
+
                     if (action === 'leave') {
                         participants.delete(String(uid));
                     } else {
                         participants.set(String(uid), username);
                     }
                     renderParticipants();
+                    // In-call only when at least one other participant is present.
                     if (participants.size > 1) {
                         setPhase('In call');
                         stopOutgoingRing();
@@ -323,6 +347,7 @@
             playOutgoingRing();
 
             client.on('user-published', async (user, mediaType) => {
+                try { ensureRemoteParticipant(user && user.uid); } catch { /* ignore */ }
                 await client.subscribe(user, mediaType);
                 if (mediaType === 'video') {
                     const remoteContainer = document.getElementById('remote-player');
@@ -345,9 +370,12 @@
 
             client.on('user-left', (user) => {
                 try { remoteAudioTracks.delete(String(user.uid)); } catch { /* ignore */ }
+                try { participants.delete(String(user.uid)); } catch { /* ignore */ }
+                renderParticipants();
             });
 
-            client.on('user-joined', () => {
+            client.on('user-joined', (user) => {
+                try { ensureRemoteParticipant(user && user.uid); } catch { /* ignore */ }
                 setPhase('In call');
                 stopOutgoingRing();
             });

@@ -8,6 +8,8 @@ services:
     envVars:
       - key: ENVIRONMENT
         value: production
+      - key: DEBUG
+        value: "False"
       # Set these in Render Dashboard (do NOT commit secrets):
       # - SECRET_KEY
       # - DATABASE_URL
@@ -16,3 +18,27 @@ services:
       # - AGORA_APP_CERTIFICATE
       # - CLOUD_NAME / API_KEY / API_SECRET
       # - EMAIL_HOST_USER / EMAIL_HOST_PASSWORD
+
+  - type: cron
+    name: vixogram-purge-old-messages
+    env: python
+    schedule: "0 * * * *"
+    command: python manage.py purge_old_messages --days 2 --batch 500
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: "False"
+
+  - type: cron
+    name: vixogram-purge-old-rooms
+    env: python
+    schedule: "15 * * * *"
+    command: python manage.py purge_old_rooms --days 4 --batch 50
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: "False"
+
+

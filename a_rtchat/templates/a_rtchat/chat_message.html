@@ -4,18 +4,55 @@
             <div class="inline-flex items-center gap-2 rounded-full border border-gray-800 bg-gray-900/70 px-4 py-2 text-xs text-gray-200">
                 <span>{{ message.body|cut:"[CALL] " }}</span>
                 <span class="text-gray-500">•</span>
-                <span class="text-gray-400">{{ message.created|timesince }} ago</span>
+                <time class="text-gray-400" data-dt="{{ message.created|date:'c' }}"></time>
             </div>
         </div>
     </div>
 {% else %}
-<div data-message-id="{{ message.id }}" class="flex {% if message.author == user %}justify-end{% else %}justify-start{% endif %} mb-2{% if extra_classes %} {{ extra_classes }}{% endif %}">
+<div id="msg-{{ message.id }}" data-message-id="{{ message.id }}" class="group flex {% if message.author == user %}justify-end{% else %}justify-start{% endif %} mb-2{% if extra_classes %} {{ extra_classes }}{% endif %}">
     <div class="flex flex-col {% if message.author == user %}items-end{% else %}items-start{% endif %} max-w-[80%]">
         
-        <div class="flex items-center gap-2 mb-1 px-1">
+        <div class="flex items-center gap-2 mb-1 px-1 w-full">
             {% if message.author != user %}
                 <img src="{{ message.author.profile.avatar }}" class="w-5 h-5 rounded-full object-cover">
                 <span class="text-[10px] font-bold text-gray-500 uppercase">{{ message.author.profile.name }}</span>
+            {% endif %}
+
+            <button type="button"
+                class="text-[10px] text-gray-400 hover:text-emerald-400 transition-colors"
+                data-reply-button
+                data-reply-to-id="{{ message.id }}"
+                data-reply-author="{{ message.author.profile.name|default:message.author.username|escape }}"
+                data-reply-preview="{{ message.body|default:message.filename|default:''|escape }}">
+                Reply
+            </button>
+
+            {% if message.author == user %}
+                <div class="ml-auto relative">
+                    <button type="button"
+                        class="opacity-0 group-hover:opacity-100 transition-opacity text-[10px] text-gray-300 hover:text-white px-2 py-1 rounded-lg hover:bg-gray-800/60"
+                        aria-label="Message actions">
+                        ⋮
+                    </button>
+
+                    <div class="pointer-events-none opacity-0 group-hover:opacity-100 group-hover:pointer-events-auto transition-opacity absolute right-0 bottom-full mb-2 min-w-28 rounded-xl border border-gray-800 bg-gray-900/95 shadow-lg shadow-black/20 overflow-hidden">
+                        {% if message.body and message.body|slice:":6" != "[CALL]" and not message.file %}
+                            <button type="button"
+                                data-edit-message
+                                data-message-id="{{ message.id }}"
+                                data-message-body="{{ message.body|default:''|escape }}"
+                                class="w-full text-left px-3 py-2 text-xs text-gray-200 hover:bg-gray-800/60">
+                                Edit
+                            </button>
+                        {% endif %}
+                        <button type="button"
+                            data-delete-message
+                            data-message-id="{{ message.id }}"
+                            class="w-full text-left px-3 py-2 text-xs text-gray-200 hover:bg-gray-800/60">
+                            Delete
+                        </button>
+                    </div>
+                </div>
             {% endif %}
         </div>
 
@@ -25,10 +62,27 @@
             {% else %}
                 bg-white text-gray-800 border border-gray-100 rounded-tl-none
             {% endif %}">
+            {% if message.reply_to %}
+                <button type="button" data-scroll-to="msg-{{ message.reply_to.id }}" class="block w-full text-left mb-2">
+                    <div class="px-3 py-2 rounded-xl border-l-2 border-emerald-400/60
+                        {% if message.author == user %}bg-indigo-500/30{% else %}bg-gray-50{% endif %}">
+                        <div class="text-[10px] font-semibold {% if message.author == user %}text-indigo-100{% else %}text-gray-600{% endif %}">
+                            Replying to {{ message.reply_to.author.profile.name|default:message.reply_to.author.username }}
+                        </div>
+                        <div class="text-[11px] {% if message.author == user %}text-indigo-50/90{% else %}text-gray-700{% endif %} truncate">
+                            {% if message.reply_to.body %}
+                                {{ message.reply_to.body }}
+                            {% elif message.reply_to.file %}
+                                {{ message.reply_to.filename }}
+                            {% endif %}
+                        </div>
+                    </div>
+                </button>
+            {% endif %}
             <div class="text-sm leading-relaxed">{% include 'a_rtchat/partials/message_content.html' %}</div>
         </div>
         
-        <span class="text-[9px] text-gray-400 mt-1 px-1">{{ message.created|date:"H:i" }}</span>
+        <time class="text-[9px] text-gray-400 mt-1 px-1" data-dt="{{ message.created|date:'c' }}"></time>
     </div>
 </div>
 {% endif %}

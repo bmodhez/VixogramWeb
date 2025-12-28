@@ -1,5 +1,6 @@
 from pathlib import Path
 import os
+from urllib.parse import urlparse
 import dj_database_url
 
 # Optional: load local .env (keeps secrets out of code)
@@ -17,19 +18,119 @@ except Exception:
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# Yahan humne environment ko "development" set kar diya hai manually
-ENVIRONMENT = "development"
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "t", "yes", "y", "on"}
+
+
+def _origin_from_url(url: str) -> str | None:
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return None
+    if not parsed.scheme or not parsed.netloc:
+        return None
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+ENVIRONMENT = os.environ.get("ENVIRONMENT", "development").strip().lower()
 
 # SECURITY WARNING: keep the secret key used in production secret!
-# Ab aapko .env ki zaroorat nahi, yahan apni key likh dein
-SECRET_KEY = 'django-insecure-aapka-koi-bhi-lamba-secret-text-yahan'
+SECRET_KEY = os.environ.get(
+    "SECRET_KEY",
+    "django-insecure-change-me-in-env",
+)
 
-# DEBUG mode on rahega kyunki hum development mein hain
-DEBUG = True
+# Local/dev should be DEBUG=True so uploads and static/media are easy to debug.
+# Production must be DEBUG=False.
+if ENVIRONMENT != "production":
+    DEBUG = True
+else:
+    DEBUG = _env_bool("DEBUG", default=False)
 
-ALLOWED_HOSTS = ['localhost', '127.0.0.1', '*']
+_cloud_name = os.environ.get('CLOUD_NAME')
+_cloud_key = os.environ.get('API_KEY')
+_cloud_secret = os.environ.get('API_SECRET')
+_use_cloudinary_media = bool(ENVIRONMENT == 'production' and _cloud_name and _cloud_key and _cloud_secret)
 
-CSRF_TRUSTED_ORIGINS = ['http://localhost:*', 'http://127.0.0.1:*']
+# Django 4.2+ storage configuration
+if ENVIRONMENT == 'production':
+    STORAGES = {
+        'default': {
+            'BACKEND': 'cloudinary_storage.storage.MediaCloudinaryStorage' if _use_cloudinary_media else 'django.core.files.storage.FileSystemStorage',
+        },
+        'staticfiles': {
+            'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage',
+        },
+    }
+else:
+    STORAGES = {
+        'default': {
+            'BACKEND': 'django.core.files.storage.FileSystemStorage',
+        },
+        'staticfiles': {
+            'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage',
+        },
+    }
+
+ALLOWED_HOSTS = [
+    "localhost",
+    "127.0.0.1",
+    ".onrender.com",
+    'vixogram-connect.onrender.com',
+    
+]
+
+# Render exposes the external URL for the service; use it to auto-trust the correct host.
+RENDER_EXTERNAL_URL = (os.environ.get("RENDER_EXTERNAL_URL") or "").strip()
+_render_origin = _origin_from_url(RENDER_EXTERNAL_URL) if RENDER_EXTERNAL_URL else None
+if _render_origin:
+    try:
+        _render_host = urlparse(RENDER_EXTERNAL_URL).netloc.split(":")[0]
+        if _render_host and _render_host not in ALLOWED_HOSTS:
+            ALLOWED_HOSTS.append(_render_host)
+    except Exception:
+        pass
+
+_extra_allowed_hosts = os.environ.get("ALLOWED_HOSTS", "").strip()
+if _extra_allowed_hosts:
+    ALLOWED_HOSTS.extend([h.strip() for h in _extra_allowed_hosts.split(",") if h.strip()])
+
+CSRF_TRUSTED_ORIGINS = [
+    "http://localhost:*",
+    "http://127.0.0.1:*",
+    'https://vixogram-connect.onrender.com',
+    'https://vixogram.onrender.com', # Agar koi aur variant hai toh
+]
+
+# Always allow Render subdomains (covers Blueprint/Dashboard setups).
+CSRF_TRUSTED_ORIGINS.append("https://*.onrender.com")
+
+if _render_origin and _render_origin not in CSRF_TRUSTED_ORIGINS:
+    CSRF_TRUSTED_ORIGINS.append(_render_origin)
+
+# Render terminates TLS at the proxy; trust HTTPS origins in production.
+if ENVIRONMENT == "production":
+    CSRF_TRUSTED_ORIGINS.extend(
+        [
+            "https://*.onrender.com",
+        ]
+    )
+
+_extra_csrf_trusted = os.environ.get("CSRF_TRUSTED_ORIGINS", "").strip()
+if _extra_csrf_trusted:
+    CSRF_TRUSTED_ORIGINS.extend(
+        [o.strip() for o in _extra_csrf_trusted.split(",") if o.strip()]
+    )
+
+if ENVIRONMENT == "production" or (_render_origin and _render_origin.startswith("https://")):
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    USE_X_FORWARDED_HOST = True
+    CSRF_COOKIE_SECURE = True
+    SESSION_COOKIE_SECURE = True
 
 # Application definition
 INSTALLED_APPS = [
@@ -58,6 +159,7 @@ SITE_ID = 1
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -66,7 +168,6 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'allauth.account.middleware.AccountMiddleware',
     'django_htmx.middleware.HtmxMiddleware',
-    'whitenoise.middleware.WhiteNoiseMiddleware',
 ]
 
 

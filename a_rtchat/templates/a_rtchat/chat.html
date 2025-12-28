@@ -96,10 +96,10 @@
 
             {% if chat_group.is_private %}
                 <div class="flex items-center gap-2">
-                    <a data-call-btn data-call-type="voice" href="{% url 'chat-call' chatroom_name %}?type=voice" class="text-xs bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 rounded-lg transition-colors">
+                    <a data-call-btn data-call-type="voice" href="#" class="text-xs bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 rounded-lg transition-colors">
                         Voice call
                     </a>
-                    <a data-call-btn data-call-type="video" href="{% url 'chat-call' chatroom_name %}?type=video" class="text-xs bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 rounded-lg transition-colors">
+                    <a data-call-btn data-call-type="video" href="#" class="text-xs bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 rounded-lg transition-colors">
                         Video call
                     </a>
                 </div>
@@ -126,12 +126,38 @@
         </div>
 
         <div class="sticky bottom-0 z-10 p-4 bg-gray-900/60 border-t border-gray-800 rounded-b-2xl">
+            <div id="reply_bar" class="hidden mb-2 rounded-xl border border-gray-800 bg-gray-900/80 px-3 py-2">
+                <div class="flex items-start justify-between gap-3">
+                    <div class="min-w-0">
+                        <div class="text-[10px] font-semibold text-emerald-400">Replying to <span id="reply_bar_author" class="text-gray-200"></span></div>
+                        <div id="reply_bar_preview" class="text-[11px] text-gray-400 truncate"></div>
+                    </div>
+                    <button type="button" id="reply_bar_cancel" class="text-gray-300 hover:text-white px-2">×</button>
+                </div>
+            </div>
+
+            <div id="edit_bar" class="hidden mb-2 rounded-xl border border-gray-800 bg-gray-900/80 px-3 py-2">
+                <div class="flex items-start justify-between gap-3">
+                    <div class="min-w-0">
+                        <div class="text-[10px] font-semibold text-emerald-400">Editing message</div>
+                        <div id="edit_bar_preview" class="text-[11px] text-gray-400 truncate"></div>
+                    </div>
+                    <button type="button" id="edit_bar_cancel" class="text-gray-300 hover:text-white px-2">×</button>
+                </div>
+            </div>
+
+            <div id="typing_indicator" class="hidden mb-2 text-[11px] text-gray-400">
+                <span id="typing_indicator_text"></span>
+            </div>
+
             <form id="chat_message_form" class="flex items-center gap-2"
                 hx-post="{{ request.path }}"
                 hx-target="#chat_messages"
                 hx-swap="none"
-                hx-on:htmx:after-request="document.getElementById('id_body').value = ''; scrollToBottom();">
+                hx-on:htmx:after-request="document.getElementById('id_body').value = ''; document.getElementById('reply_to_id').value=''; document.getElementById('reply_bar').classList.add('hidden'); scrollToBottom();">
                 {% csrf_token %}
+
+                <input type="hidden" name="reply_to_id" id="reply_to_id" value="" />
 
                 {{ form.body }} <button type="submit" class="bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg px-4 py-2 transition-colors">
                     Send
@@ -146,7 +172,8 @@
                           hx-target="#upload_feedback"
                           hx-swap="innerHTML"
                           hx-encoding="multipart/form-data"
-                          hx-on:chatFileUploaded="document.getElementById('chat_file_input').value='';">
+                          hx-on:chatFileUploaded="document.getElementById('chat_file_input').value='';"
+                          hx-on:htmx:after-request="if(event.detail.successful){document.getElementById('chat_file_input').value='';}">
                         {% csrf_token %}
 
                         <input id="chat_file_input" name="file" type="file" accept="image/*,video/*"
@@ -171,6 +198,29 @@
     </div>
 </wrapper>
 
+<!-- Draggable call popup (WhatsApp-like) -->
+<div id="call_popup" class="hidden fixed bottom-6 right-6 z-50 w-80 h-80 rounded-2xl border border-gray-800 bg-gray-900/95 shadow-2xl overflow-hidden">
+    <div id="call_popup_header" class="px-3 py-2 bg-gray-900/90 border-b border-gray-800 flex items-center justify-between cursor-move select-none">
+        <div class="min-w-0">
+            <div id="call_popup_title" class="text-xs font-semibold text-gray-100 truncate">Call</div>
+            <div id="call_popup_subtitle" class="text-[10px] text-gray-400 truncate">Connecting…</div>
+        </div>
+        <button id="call_popup_end" type="button" class="text-xs bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 rounded-lg transition-colors">End</button>
+    </div>
+    <div class="p-3 h-[calc(100%-44px)]">
+        <div id="call_popup_status" class="text-[11px] text-gray-400"></div>
+        <div id="call_popup_video" class="hidden mt-3 grid grid-cols-2 gap-2 h-[calc(100%-26px)]">
+            <div class="rounded-xl border border-gray-800 bg-black/30 overflow-hidden">
+                <div id="call_local_player" class="w-full h-full"></div>
+            </div>
+            <div class="rounded-xl border border-gray-800 bg-black/30 overflow-hidden">
+                <div id="call_remote_player" class="w-full h-full"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://download.agora.io/sdk/release/AgoraRTC_N.js"></script>
 <script>
     (function () {
         const chatroomName = "{{ chatroom_name|escapejs }}";
@@ -178,8 +228,12 @@
         const wsUrl = `${wsScheme}://${window.location.host}/ws/chatroom/${chatroomName}`;
         const pollUrl = "{% url 'chat-poll' chatroom_name %}";
         const inviteUrl = "{% url 'chat-call-invite' chatroom_name %}";
-            const callBaseUrl = "{% url 'chat-call' chatroom_name %}";
+        const tokenUrl = "{% url 'agora-token' chatroom_name %}";
+        const presenceUrl = "{% url 'chat-call-presence' chatroom_name %}";
+        const otherUsername = "{% if other_user %}{{ other_user.username|escapejs }}{% else %}{% endif %}";
         const callEventUrl = "{% url 'chat-call-event' chatroom_name %}";
+        const messageEditUrlTemplate = "{% url 'message-edit' 0 %}";
+        const messageDeleteUrlTemplate = "{% url 'message-delete' 0 %}";
 
             // -------- Ringtone (incoming) --------
             let audioCtx = null;
@@ -261,9 +315,186 @@
         const messagesEl = document.getElementById('chat_messages');
         const onlineCountEl = document.getElementById('online-count');
 
+        const replyBar = document.getElementById('reply_bar');
+        const replyBarAuthor = document.getElementById('reply_bar_author');
+        const replyBarPreview = document.getElementById('reply_bar_preview');
+        const replyBarCancel = document.getElementById('reply_bar_cancel');
+        const replyToIdInput = document.getElementById('reply_to_id');
+
+        const editBar = document.getElementById('edit_bar');
+        const editBarPreview = document.getElementById('edit_bar_preview');
+        const editBarCancel = document.getElementById('edit_bar_cancel');
+        let editingMessageId = null;
+
+        function startEditingMessage(messageId, body) {
+            if (!input) return;
+            editingMessageId = messageId;
+            if (replyToIdInput) replyToIdInput.value = '';
+            if (replyBar) replyBar.classList.add('hidden');
+
+            if (editBarPreview) editBarPreview.textContent = (body || '').slice(0, 120);
+            if (editBar) editBar.classList.remove('hidden');
+
+            input.value = body || '';
+            input.focus();
+        }
+
+        function cancelEditingMessage() {
+            editingMessageId = null;
+            if (editBar) editBar.classList.add('hidden');
+            if (editBarPreview) editBarPreview.textContent = '';
+        }
+
+        if (editBarCancel) {
+            editBarCancel.addEventListener('click', function () {
+                cancelEditingMessage();
+            });
+        }
+
+        const typingIndicatorEl = document.getElementById('typing_indicator');
+        const typingIndicatorTextEl = document.getElementById('typing_indicator_text');
+        const typingUsers = new Map();
+        const typingTimers = new Map();
+        let typingStopTimer = null;
+        let lastTypingPingAt = 0;
+
+        function renderTypingIndicator() {
+            if (!typingIndicatorEl || !typingIndicatorTextEl) return;
+            const names = Array.from(typingUsers.values()).filter(Boolean);
+            if (!names.length) {
+                typingIndicatorEl.classList.add('hidden');
+                typingIndicatorTextEl.textContent = '';
+                return;
+            }
+            typingIndicatorEl.classList.remove('hidden');
+            typingIndicatorTextEl.textContent = `${names.join(', ')} typing...`;
+        }
+
+        function handleTypingEvent(payload) {
+            const authorId = payload.author_id;
+            if (!authorId) return;
+
+            const username = (payload.username || '').trim();
+            const isTyping = !!payload.is_typing;
+
+            if (typingTimers.has(authorId)) {
+                clearTimeout(typingTimers.get(authorId));
+                typingTimers.delete(authorId);
+            }
+
+            if (isTyping) {
+                typingUsers.set(authorId, username);
+                typingTimers.set(authorId, setTimeout(() => {
+                    typingUsers.delete(authorId);
+                    typingTimers.delete(authorId);
+                    renderTypingIndicator();
+                }, 4000));
+            } else {
+                typingUsers.delete(authorId);
+            }
+
+            renderTypingIndicator();
+        }
+
+        function sendTyping(isTyping) {
+            try {
+                if (!socket || socket.readyState !== WebSocket.OPEN) return;
+                socket.send(JSON.stringify({ type: 'typing', is_typing: !!isTyping }));
+            } catch {
+                // ignore
+            }
+        }
+
+        if (input) {
+            input.addEventListener('input', () => {
+                const now = Date.now();
+                if (now - lastTypingPingAt > 1200) {
+                    sendTyping(true);
+                    lastTypingPingAt = now;
+                }
+                if (typingStopTimer) clearTimeout(typingStopTimer);
+                typingStopTimer = setTimeout(() => {
+                    sendTyping(false);
+                    typingStopTimer = null;
+                }, 1800);
+            });
+
+            input.addEventListener('blur', () => {
+                if (typingStopTimer) clearTimeout(typingStopTimer);
+                typingStopTimer = null;
+                sendTyping(false);
+            });
+        }
+
+        if (form) {
+            // Capture submit before HTMX when editing.
+            form.addEventListener('submit', async (e) => {
+                if (!editingMessageId) return;
+                e.preventDefault();
+                e.stopPropagation();
+
+                const body = (input && input.value ? input.value : '').trim();
+                if (!body) return;
+
+                const url = messageEditUrlTemplate.replace('/0/', `/${editingMessageId}/`);
+                try {
+                    const params = new URLSearchParams();
+                    params.set('body', body);
+                    await fetch(url, {
+                        method: 'POST',
+                        credentials: 'same-origin',
+                        headers: {
+                            'Content-Type': 'application/x-www-form-urlencoded',
+                            'X-CSRFToken': (typeof getCookie === 'function' ? getCookie('csrftoken') : ''),
+                        },
+                        body: params,
+                    });
+                } catch {
+                    // ignore
+                }
+
+                cancelEditingMessage();
+                if (input) input.value = '';
+                safeScrollToBottom();
+            }, true);
+
+            form.addEventListener('submit', () => {
+                if (typingStopTimer) clearTimeout(typingStopTimer);
+                typingStopTimer = null;
+                sendTyping(false);
+            });
+        }
+
         let socket = null;
         let wsConnected = false;
         let lastId = 0;
+
+        function hydrateLocalTimes(root) {
+            const container = root || document;
+            const nodes = container.querySelectorAll ? container.querySelectorAll('time[data-dt]') : [];
+            if (!nodes || !nodes.length) return;
+
+            const timeFmt = new Intl.DateTimeFormat(undefined, {
+                hour: '2-digit',
+                minute: '2-digit',
+            });
+            const fullFmt = new Intl.DateTimeFormat(undefined, {
+                dateStyle: 'medium',
+                timeStyle: 'short',
+            });
+
+            nodes.forEach((el) => {
+                const iso = el.getAttribute('data-dt');
+                if (!iso) return;
+                const d = new Date(iso);
+                if (Number.isNaN(d.getTime())) return;
+
+                el.textContent = timeFmt.format(d);
+                // Hover tooltip for clarity across dates/timezones
+                el.setAttribute('title', fullFmt.format(d));
+                if (!el.getAttribute('datetime')) el.setAttribute('datetime', iso);
+            });
+        }
 
         function safeScrollToBottom() {
             if (typeof scrollToBottom === 'function') scrollToBottom();
@@ -294,8 +525,29 @@
 
                 if (payload.type === 'chat_message' && payload.html) {
                     messagesEl.insertAdjacentHTML('beforeend', payload.html);
+                    hydrateLocalTimes(messagesEl);
                     updateLastIdFromDom();
                     safeScrollToBottom();
+                    return;
+                }
+
+                if (payload.type === 'typing') {
+                    handleTypingEvent(payload);
+                    return;
+                }
+
+                if (payload.type === 'message_update' && payload.message_id && payload.html) {
+                    const el = document.getElementById(`msg-${payload.message_id}`);
+                    if (el) {
+                        el.outerHTML = payload.html;
+                        hydrateLocalTimes(document);
+                    }
+                    return;
+                }
+
+                if (payload.type === 'message_delete' && payload.message_id) {
+                    const el = document.getElementById(`msg-${payload.message_id}`);
+                    if (el) el.remove();
                     return;
                 }
 
@@ -306,6 +558,12 @@
                 if (payload.type === 'call_invite') {
                     if (!window.__hasGlobalCallInvite) {
                         showIncomingCall(payload);
+                    }
+                }
+
+                if (payload.type === 'call_control') {
+                    if (payload.action === 'end' || payload.action === 'decline') {
+                        endCallPopup(payload.action === 'decline' ? 'Call declined' : 'Call ended');
                     }
                 }
             };
@@ -324,7 +582,44 @@
         // Ensure correct position on initial render
         document.addEventListener('DOMContentLoaded', function () {
             updateLastIdFromDom();
+            hydrateLocalTimes(document);
             safeScrollToBottom();
+        });
+
+        // -------- Message Edit/Delete (hover actions) --------
+        document.addEventListener('click', async function (e) {
+            const editBtn = e.target.closest('[data-edit-message]');
+            const delBtn = e.target.closest('[data-delete-message]');
+
+            if (!editBtn && !delBtn) return;
+            e.preventDefault();
+            e.stopPropagation();
+
+            const messageId = (editBtn || delBtn).dataset.messageId;
+            if (!messageId) return;
+
+            if (editBtn) {
+                const body = editBtn.dataset.messageBody || '';
+                startEditingMessage(messageId, body);
+                return;
+            }
+
+            if (delBtn) {
+                const url = messageDeleteUrlTemplate.replace('/0/', `/${messageId}/`);
+                try {
+                    await fetch(url, {
+                        method: 'POST',
+                        credentials: 'same-origin',
+                        headers: {
+                            'Content-Type': 'application/x-www-form-urlencoded',
+                            'X-CSRFToken': (typeof getCookie === 'function' ? getCookie('csrftoken') : ''),
+                        },
+                        body: new URLSearchParams(),
+                    });
+                } catch {
+                    // ignore
+                }
+            }
         });
 
         function ensureIncomingContainer() {
@@ -352,7 +647,7 @@
                     <div class="font-semibold">Incoming ${type === 'video' ? 'video' : 'voice'} call</div>
                     <div class="text-gray-300 text-xs mt-0.5">from ${from}</div>
                     <div class="mt-3 flex gap-2">
-                        <a href="${callBaseUrl}?type=${type}&role=callee" class="text-xs bg-emerald-500 hover:bg-emerald-600 text-white px-3 py-1.5 rounded-lg transition-colors">Accept</a>
+                        <button type="button" data-accept class="text-xs bg-emerald-500 hover:bg-emerald-600 text-white px-3 py-1.5 rounded-lg transition-colors">Accept</button>
                         <button type="button" data-decline class="text-xs bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 rounded-lg transition-colors">Decline</button>
                     </div>
                 </div>
@@ -367,6 +662,12 @@
                 stopIncomingRing();
             };
             toast.querySelector('[data-close]')?.addEventListener('click', removeToast);
+            toast.querySelector('[data-accept]')?.addEventListener('click', async () => {
+                stopIncomingRing();
+                window.__hasGlobalCallInvite = true;
+                removeToast();
+                await openCallPopup(type, 'callee');
+            });
             toast.querySelector('[data-decline]')?.addEventListener('click', async () => {
                 try {
                     const body = new URLSearchParams();
@@ -388,14 +689,231 @@
             });
             setTimeout(removeToast, 15000);
 
-            // Stop ring immediately if user accepts (navigation)
-            const accept = toast.querySelector('a');
-            if (accept) accept.addEventListener('click', stopIncomingRing);
-
             container.appendChild(toast);
         }
 
-        // When clicking call buttons, notify the other member first, then navigate.
+        // --- Call popup (no separate page) ---
+        const callPopupEl = document.getElementById('call_popup');
+        const callPopupHeaderEl = document.getElementById('call_popup_header');
+        const callPopupTitleEl = document.getElementById('call_popup_title');
+        const callPopupSubtitleEl = document.getElementById('call_popup_subtitle');
+        const callPopupStatusEl = document.getElementById('call_popup_status');
+        const callPopupVideoEl = document.getElementById('call_popup_video');
+        const callLocalEl = document.getElementById('call_local_player');
+        const callRemoteEl = document.getElementById('call_remote_player');
+        const callEndBtn = document.getElementById('call_popup_end');
+
+        let callActive = false;
+        let callTypeActive = null;
+        let callRoleActive = null;
+        let callClient = null;
+        let localTracks = { audio: null, video: null };
+
+        function setCallStatus(text) {
+            if (callPopupStatusEl) callPopupStatusEl.textContent = text || '';
+            if (callPopupSubtitleEl) callPopupSubtitleEl.textContent = text || '';
+        }
+
+        function showCallPopup() {
+            if (!callPopupEl) return;
+            callPopupEl.classList.remove('hidden');
+        }
+
+        function hideCallPopup() {
+            if (!callPopupEl) return;
+            callPopupEl.classList.add('hidden');
+        }
+
+        async function fetchAgoraToken() {
+            const res = await fetch(tokenUrl, { credentials: 'same-origin' });
+            const data = await res.json();
+            if (!res.ok || data.error) throw new Error(data.error || 'Token fetch failed');
+            return data;
+        }
+
+        function getCsrf() {
+            try { return (typeof getCookie === 'function' ? getCookie('csrftoken') : ''); } catch { return ''; }
+        }
+
+        async function announcePresence(action, uid, type) {
+            try {
+                const body = new URLSearchParams();
+                body.set('action', action);
+                body.set('type', type);
+                body.set('uid', String(uid || 0));
+                await fetch(presenceUrl, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                        'X-CSRFToken': getCsrf(),
+                    },
+                    body,
+                });
+            } catch {
+                // ignore
+            }
+        }
+
+        async function postCallEvent(action, type) {
+            try {
+                const body = new URLSearchParams();
+                body.set('action', action);
+                body.set('type', type);
+                await fetch(callEventUrl, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                        'X-CSRFToken': getCsrf(),
+                    },
+                    body,
+                });
+            } catch {
+                // ignore
+            }
+        }
+
+        async function openCallPopup(type, role) {
+            if (callActive) return;
+            callActive = true;
+            callTypeActive = (type || 'voice');
+            callRoleActive = (role || 'caller');
+
+            showCallPopup();
+            if (callPopupTitleEl) callPopupTitleEl.textContent = callTypeActive === 'video' ? 'Video call' : 'Voice call';
+            setCallStatus('Connecting…');
+
+            if (callPopupVideoEl) {
+                if (callTypeActive === 'video') callPopupVideoEl.classList.remove('hidden');
+                else callPopupVideoEl.classList.add('hidden');
+            }
+
+            try {
+                const { token, uid, channel, app_id } = await fetchAgoraToken();
+                if (!app_id) throw new Error('Agora is not configured (missing AGORA_APP_ID).');
+
+                callClient = AgoraRTC.createClient({ mode: 'rtc', codec: 'vp8' });
+
+                callClient.on('user-joined', (user) => {
+                    if (callPopupSubtitleEl) {
+                        callPopupSubtitleEl.textContent = otherUsername ? `${otherUsername} joined` : 'User joined';
+                    }
+                });
+
+                callClient.on('user-published', async (user, mediaType) => {
+                    await callClient.subscribe(user, mediaType);
+                    if (mediaType === 'video' && callRemoteEl) {
+                        try { user.videoTrack.play(callRemoteEl); } catch {}
+                    }
+                    if (mediaType === 'audio') {
+                        try { user.audioTrack.play(); } catch {}
+                    }
+                    setCallStatus('In call');
+                });
+
+                callClient.on('user-left', () => {
+                    setCallStatus('Waiting…');
+                });
+
+                await callClient.join(app_id, channel, token, uid);
+                await announcePresence('join', uid, callTypeActive);
+
+                if (callRoleActive === 'caller') {
+                    await postCallEvent('start', callTypeActive);
+                }
+
+                localTracks.audio = await AgoraRTC.createMicrophoneAudioTrack({ AEC: true, AGC: true, ANS: true });
+                if (callTypeActive === 'video') {
+                    localTracks.video = await AgoraRTC.createCameraVideoTrack();
+                    if (callLocalEl) {
+                        try { localTracks.video.play(callLocalEl); } catch {}
+                    }
+                    await callClient.publish([localTracks.audio, localTracks.video]);
+                } else {
+                    await callClient.publish([localTracks.audio]);
+                }
+
+                setCallStatus('In call');
+            } catch (e) {
+                setCallStatus('Error: ' + (e && e.message ? e.message : String(e)));
+            }
+        }
+
+        async function endCallPopup(reason) {
+            if (!callActive) return;
+            try {
+                if (reason) setCallStatus(reason);
+                // Broadcast end marker (only once is fine; server dedupes)
+                if (callTypeActive) await postCallEvent('end', callTypeActive);
+            } catch {}
+
+            try {
+                if (localTracks.video) {
+                    try { localTracks.video.stop(); } catch {}
+                    try { localTracks.video.close(); } catch {}
+                }
+                if (localTracks.audio) {
+                    try { localTracks.audio.stop(); } catch {}
+                    try { localTracks.audio.close(); } catch {}
+                }
+            } catch {}
+
+            try {
+                if (callClient) {
+                    try { await callClient.leave(); } catch {}
+                }
+            } catch {}
+
+            callClient = null;
+            localTracks = { audio: null, video: null };
+            callActive = false;
+            callTypeActive = null;
+            callRoleActive = null;
+            hideCallPopup();
+        }
+
+        if (callEndBtn) {
+            callEndBtn.addEventListener('click', () => endCallPopup('Call ended'));
+        }
+
+        // Draggable popup
+        (function () {
+            if (!callPopupEl || !callPopupHeaderEl) return;
+            let dragging = false;
+            let offsetX = 0;
+            let offsetY = 0;
+
+            callPopupHeaderEl.addEventListener('pointerdown', (e) => {
+                dragging = true;
+                callPopupEl.setPointerCapture(e.pointerId);
+                const rect = callPopupEl.getBoundingClientRect();
+                offsetX = e.clientX - rect.left;
+                offsetY = e.clientY - rect.top;
+            });
+
+            callPopupHeaderEl.addEventListener('pointermove', (e) => {
+                if (!dragging) return;
+                const left = Math.max(8, Math.min(window.innerWidth - callPopupEl.offsetWidth - 8, e.clientX - offsetX));
+                const top = Math.max(8, Math.min(window.innerHeight - callPopupEl.offsetHeight - 8, e.clientY - offsetY));
+                callPopupEl.style.left = `${left}px`;
+                callPopupEl.style.top = `${top}px`;
+                callPopupEl.style.right = 'auto';
+                callPopupEl.style.bottom = 'auto';
+            });
+
+            callPopupHeaderEl.addEventListener('pointerup', (e) => {
+                dragging = false;
+                try { callPopupEl.releasePointerCapture(e.pointerId); } catch {}
+            });
+
+            callPopupHeaderEl.addEventListener('pointercancel', (e) => {
+                dragging = false;
+                try { callPopupEl.releasePointerCapture(e.pointerId); } catch {}
+            });
+        })();
+
+        // When clicking call buttons, notify the other member first, then open popup.
         document.addEventListener('click', async function (e) {
             const a = e.target && e.target.closest ? e.target.closest('[data-call-btn]') : null;
             if (!a) return;
@@ -417,9 +935,7 @@
             } catch {
                 // ignore
             }
-            const url = new URL(a.href, window.location.origin);
-            url.searchParams.set('role', 'caller');
-            window.location.href = url.toString();
+            await openCallPopup(type, 'caller');
         }, true);
 
         async function poll() {
@@ -435,6 +951,7 @@
                 }
                 if (data && data.messages_html) {
                     messagesEl.insertAdjacentHTML('beforeend', data.messages_html);
+                    hydrateLocalTimes(messagesEl);
                     updateLastIdFromDom();
                     safeScrollToBottom();
                 }
@@ -449,6 +966,47 @@
 
         setInterval(poll, 1200);
         connect();
+
+        function clearReply() {
+            if (replyToIdInput) replyToIdInput.value = '';
+            if (replyBar) replyBar.classList.add('hidden');
+            if (replyBarAuthor) replyBarAuthor.textContent = '';
+            if (replyBarPreview) replyBarPreview.textContent = '';
+        }
+
+        if (replyBarCancel) {
+            replyBarCancel.addEventListener('click', function () {
+                clearReply();
+                if (input) input.focus();
+            });
+        }
+
+        // Click "Reply" on a message bubble
+        document.addEventListener('click', function (e) {
+            const btn = e.target && e.target.closest ? e.target.closest('[data-reply-button]') : null;
+            if (!btn) return;
+
+            const msgId = btn.getAttribute('data-reply-to-id') || '';
+            const author = btn.getAttribute('data-reply-author') || '';
+            const preview = btn.getAttribute('data-reply-preview') || '';
+
+            if (replyToIdInput) replyToIdInput.value = msgId;
+            if (replyBarAuthor) replyBarAuthor.textContent = author;
+            if (replyBarPreview) replyBarPreview.textContent = preview;
+            if (replyBar) replyBar.classList.remove('hidden');
+            if (input) input.focus();
+        }, true);
+
+        // Click replied-to snippet to jump to original
+        document.addEventListener('click', function (e) {
+            const jump = e.target && e.target.closest ? e.target.closest('[data-scroll-to]') : null;
+            if (!jump) return;
+            const targetId = jump.getAttribute('data-scroll-to');
+            if (!targetId) return;
+            const el = document.getElementById(targetId);
+            if (!el) return;
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, true);
     })();
 </script>
 

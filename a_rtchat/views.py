@@ -50,15 +50,18 @@ def chat_view(request, chatroom_name='public-chat'):
             
     if chat_group.groupchat_name:
         if request.user not in chat_group.members.all():
-            # Email verification gate (Allauth):
-            # - If user has NO email record yet, allow joining (common in dev / username-only signup)
-            # - If user has an email record, require at least one verified email
-            email_qs = request.user.emailaddress_set.all()
-            if (not email_qs.exists()) or email_qs.filter(verified=True).exists():
-                chat_group.members.add(request.user)
+            # Only require verified email if Allauth is configured to make it mandatory.
+            # Otherwise, allow users to join/open group chats without being forced into email verification.
+            email_verification = str(getattr(settings, 'ACCOUNT_EMAIL_VERIFICATION', 'optional')).lower()
+            if email_verification == 'mandatory':
+                email_qs = request.user.emailaddress_set.all()
+                if email_qs.filter(verified=True).exists():
+                    chat_group.members.add(request.user)
+                else:
+                    messages.warning(request, 'Verify your email to join this group chat.')
+                    return redirect('profile-settings')
             else:
-                messages.warning(request, 'Verify your email to join this group chat.')
-                return redirect('profile-settings')
+                chat_group.members.add(request.user)
 
     uploads_used = 0
     uploads_remaining = None
@@ -78,6 +81,17 @@ def chat_view(request, chatroom_name='public-chat'):
             message = form.save(commit=False)
             message.author = request.user
             message.group = chat_group
+
+            reply_to_id = (request.POST.get('reply_to_id') or '').strip()
+            if reply_to_id:
+                try:
+                    reply_to_pk = int(reply_to_id)
+                except ValueError:
+                    reply_to_pk = None
+                if reply_to_pk:
+                    reply_to = GroupMessage.objects.filter(pk=reply_to_pk, group=chat_group).first()
+                    if reply_to:
+                        message.reply_to = reply_to
             message.save()
 
             # Broadcast to websocket listeners (including sender) so the message appears instantly
@@ -336,10 +350,14 @@ def chat_poll_view(request, chatroom_name):
     if chat_group.is_private and request.user not in chat_group.members.all():
         raise Http404()
     if chat_group.groupchat_name and request.user not in chat_group.members.all():
-        if request.user.emailaddress_set.filter(verified=True).exists():
-            chat_group.members.add(request.user)
+        email_verification = str(getattr(settings, 'ACCOUNT_EMAIL_VERIFICATION', 'optional')).lower()
+        if email_verification == 'mandatory':
+            if request.user.emailaddress_set.filter(verified=True).exists():
+                chat_group.members.add(request.user)
+            else:
+                return JsonResponse({'messages_html': '', 'last_id': request.GET.get('after')}, status=403)
         else:
-            return JsonResponse({'messages_html': '', 'last_id': request.GET.get('after')}, status=403)
+            chat_group.members.add(request.user)
 
     try:
         after_id = int(request.GET.get('after', '0'))
@@ -359,6 +377,71 @@ def chat_poll_view(request, chatroom_name):
 
     last_id = new_messages.last().id
     return JsonResponse({'messages_html': ''.join(parts), 'last_id': last_id, 'online_count': online_count})
+
+
+@login_required
+def message_edit_view(request, message_id: int):
+    if request.method != 'POST':
+        raise Http404()
+
+    message = get_object_or_404(GroupMessage, pk=message_id)
+    chat_group = message.group
+
+    if message.author_id != request.user.id:
+        raise Http404()
+
+    # Permission checks (match chatroom access rules)
+    if getattr(chat_group, 'is_private', False) and request.user not in chat_group.members.all():
+        raise Http404()
+    if chat_group.groupchat_name and request.user not in chat_group.members.all():
+        raise Http404()
+
+    body = (request.POST.get('body') or '').strip()
+    if not body:
+        return JsonResponse({'error': 'Message cannot be empty'}, status=400)
+
+    message.body = body
+    message.save(update_fields=['body'])
+
+    channel_layer = get_channel_layer()
+    async_to_sync(channel_layer.group_send)(
+        chat_group.group_name,
+        {
+            'type': 'message_update_handler',
+            'message_id': message.id,
+        },
+    )
+    return HttpResponse('', status=204)
+
+
+@login_required
+def message_delete_view(request, message_id: int):
+    if request.method != 'POST':
+        raise Http404()
+
+    message = get_object_or_404(GroupMessage, pk=message_id)
+    chat_group = message.group
+
+    if message.author_id != request.user.id:
+        raise Http404()
+
+    if getattr(chat_group, 'is_private', False) and request.user not in chat_group.members.all():
+        raise Http404()
+    if chat_group.groupchat_name and request.user not in chat_group.members.all():
+        raise Http404()
+
+    deleted_id = message.id
+    message.delete()
+
+    channel_layer = get_channel_layer()
+    async_to_sync(channel_layer.group_send)(
+        chat_group.group_name,
+        {
+            'type': 'message_delete_handler',
+            'message_id': deleted_id,
+        },
+    )
+    return HttpResponse('', status=204)
 
 
 @login_required

@@ -11,6 +11,7 @@ class ChatGroup(models.Model):
     users_online = models.ManyToManyField(User, related_name='online_in_groups', blank=True)
     members = models.ManyToManyField(User, related_name='chat_groups', blank=True)
     is_private = models.BooleanField(default=False)
+    created = models.DateTimeField(auto_now_add=True)
     # Private rooms that can be joined via a shareable code (not listed globally).
     is_code_room = models.BooleanField(default=False)
     room_code = models.CharField(max_length=16, unique=True, null=True, blank=True, db_index=True)
@@ -45,6 +46,7 @@ class PrivateChatGroup(ChatGroup):
     
 class GroupMessage(models.Model):
     group = models.ForeignKey(ChatGroup, related_name='chat_messages', on_delete=models.CASCADE)
+    reply_to = models.ForeignKey('self', related_name='replies', null=True, blank=True, on_delete=models.SET_NULL)
     author = models.ForeignKey(User, on_delete=models.CASCADE)
     body = models.CharField(max_length=300, blank=True, null=True)
     file = models.FileField(upload_to='files/', blank=True, null=True)
@@ -75,3 +77,4 @@ class GroupMessage(models.Model):
             return True 
         except:
             return False
+
