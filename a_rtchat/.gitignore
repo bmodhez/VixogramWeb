@@ -1,8 +1,6 @@
-venv/
-node/
-media/
-migrations/
 __pycache__/
-db.sqlite3
-.env
-.DS_Store
+*.py[cod]
+*$py.class
+
+# Keep Django migrations tracked.
+# Note: project-level ignores should live in the repo root .gitignore.
