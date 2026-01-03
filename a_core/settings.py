@@ -4,24 +4,31 @@ from urllib.parse import urlparse
 import dj_database_url
 
 
-# Detect Render platform early (used to pick safer defaults)
-IS_RENDER = bool((os.environ.get('RENDER_EXTERNAL_URL') or '').strip() or (os.environ.get('RENDER') or '').strip())
+# Build paths inside the project like this: BASE_DIR / 'subdir'.
+BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Optional: load local .env (keeps secrets out of code)
+#
+# IMPORTANT:
+# - For local/dev, we want the real `.env` file to be the single source of truth.
+# - On hosted platforms (Render, etc.) you typically don't have a `.env` file on disk;
+#   env vars come from the platform dashboard.
+#
+# We use overwrite=True so `.env` wins over stale machine/user-level env vars.
 try:
     import environ
 
     env = environ.Env()
-    _env_path = Path(__file__).resolve().parent.parent / '.env'
-    # Do not load project .env on Render; use Render Dashboard env vars instead.
-    if (not IS_RENDER) and _env_path.exists():
-        environ.Env.read_env(str(_env_path))
+    _env_path = BASE_DIR / '.env'
+    if _env_path.exists():
+        environ.Env.read_env(str(_env_path), overwrite=True)
 except Exception:
     # If django-environ isn't installed or .env missing, fall back to normal os.environ
     pass
 
-# Build paths inside the project like this: BASE_DIR / 'subdir'.
-BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Detect Render platform early (used to pick safer defaults)
+IS_RENDER = bool((os.environ.get('RENDER_EXTERNAL_URL') or '').strip() or (os.environ.get('RENDER') or '').strip())
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -269,7 +276,7 @@ ASGI_APPLICATION = 'a_core.asgi.application'
 REDIS_URL = os.environ.get('REDIS_URL')
 
 # Local/dev: don't depend on Redis (prevents WS disconnects when Redis isn't running).
-if os.environ.get('ENVIRONMENT') == 'production' and REDIS_URL:
+if ENVIRONMENT == 'production' and REDIS_URL:
     CHANNEL_LAYERS = {
         'default': {
             'BACKEND': 'channels_redis.core.RedisChannelLayer',
@@ -287,7 +294,7 @@ else:
     }
 
 # Agar Render par ho toh DATABASE_URL use karo, warna local SQLite
-if os.environ.get('ENVIRONMENT') == 'production':
+if ENVIRONMENT == 'production':
     DATABASES = {
         'default': dj_database_url.parse(os.environ.get('DATABASE_URL'))
     }
