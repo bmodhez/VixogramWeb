@@ -100,6 +100,13 @@ STORAGES = {
     },
 }
 
+# Whitenoise Manifest strict mode can crash pages at runtime if any template
+# references a static file that wasn't collected (e.g. when Render build cache
+# is stale or collectstatic didn't run). Disable strictness in production so the
+# app stays up; missing assets will 404 instead of causing a 500.
+if ENVIRONMENT == 'production':
+    WHITENOISE_MANIFEST_STRICT = False
+
 ALLOWED_HOSTS = [
     "localhost",
     "127.0.0.1",
