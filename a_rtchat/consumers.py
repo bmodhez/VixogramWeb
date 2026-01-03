@@ -1,5 +1,6 @@
 from channels.generic.websocket import WebsocketConsumer
 from django.shortcuts import get_object_or_404
+from django.http import Http404
 from django.template.loader import render_to_string
 from django.contrib.auth import get_user_model
 from django.conf import settings
@@ -76,8 +77,18 @@ def _resolve_authenticated_user(scope_user):
 class ChatroomConsumer(WebsocketConsumer):
     def connect(self):
         self.user = _resolve_authenticated_user(self.scope.get('user'))
-        self.chatroom_name = self.scope['url_route']['kwargs']['chatroom_name'] 
-        self.chatroom = get_object_or_404(ChatGroup, group_name=self.chatroom_name)
+        self.chatroom_name = self.scope['url_route']['kwargs']['chatroom_name']
+
+        # If the room was deleted / invalid URL, don't raise and spam logs.
+        try:
+            self.chatroom = ChatGroup.objects.get(group_name=self.chatroom_name)
+        except (ChatGroup.DoesNotExist, Http404):
+            # 4404 is a commonly-used close code for "not found".
+            try:
+                self.close(code=4404)
+            except Exception:
+                self.close()
+            return
         self.room_group_name = chatroom_channel_group_name(self.chatroom)
 
         # Prevent non-members from connecting to private rooms.
@@ -130,11 +141,13 @@ class ChatroomConsumer(WebsocketConsumer):
         
         
     def disconnect(self, close_code):
-        async_to_sync(self.channel_layer.group_discard)(
-            self.room_group_name, self.channel_name
-        )
+        # Guard against disconnect being called for a partially initialized connection.
+        if hasattr(self, 'room_group_name'):
+            async_to_sync(self.channel_layer.group_discard)(
+                self.room_group_name, self.channel_name
+            )
         # remove and update online users
-        if getattr(self.user, 'is_authenticated', False):
+        if getattr(getattr(self, 'user', None), 'is_authenticated', False) and hasattr(self, 'chatroom'):
             if self.user in self.chatroom.users_online.all():
                 self.chatroom.users_online.remove(self.user.pk)
                 self.update_online_count() 
