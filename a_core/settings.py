@@ -101,6 +101,12 @@ STORAGES = {
     },
 }
 
+# In production, prefer stability over strictness: serve static files using
+# Django's staticfiles finders as a fallback. This prevents runtime 500/404s
+# if collectstatic output is missing/stale on a deploy.
+if ENVIRONMENT == 'production':
+    WHITENOISE_USE_FINDERS = True
+
 
 
 ALLOWED_HOSTS = [
