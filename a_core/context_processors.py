@@ -25,3 +25,34 @@ def firebase_config(request):
         'FIREBASE_CONFIG_JSON': json.dumps(cfg if ready else {}),
         'FIREBASE_VAPID_PUBLIC_KEY': getattr(settings, 'FIREBASE_VAPID_PUBLIC_KEY', '') if ready else '',
     }
+
+
+def site_contact(request):
+    """Expose basic site contact info to templates."""
+    return {
+        'CONTACT_EMAIL': (getattr(settings, 'CONTACT_EMAIL', '') or '').strip(),
+        'CONTACT_INSTAGRAM_URL': (getattr(settings, 'CONTACT_INSTAGRAM_URL', '') or '').strip(),
+    }
+
+
+def recaptcha_config(request):
+    """Expose public reCAPTCHA config to templates."""
+    enabled = bool(getattr(settings, 'RECAPTCHA_ENABLED', False))
+    site_key = (getattr(settings, 'RECAPTCHA_SITE_KEY', '') or '').strip()
+    version = (getattr(settings, 'RECAPTCHA_VERSION', 'v2') or 'v2').strip().lower()
+    provider = (getattr(settings, 'RECAPTCHA_PROVIDER', 'standard') or 'standard').strip().lower()
+    script_url = (getattr(settings, 'RECAPTCHA_SCRIPT_URL', '') or '').strip()
+    action = (getattr(settings, 'RECAPTCHA_ACTION', 'signup') or 'signup').strip() or 'signup'
+    if not site_key:
+        enabled = False
+    return {
+        'RECAPTCHA_ENABLED': bool(enabled),
+        'RECAPTCHA_SITE_KEY': site_key,
+        'RECAPTCHA_VERSION': version,
+        'RECAPTCHA_PROVIDER': provider,
+        'RECAPTCHA_SCRIPT_URL': script_url,
+        'RECAPTCHA_ACTION': action,
+        # Helpful dev hint: most Google reCAPTCHA site keys start with "6L".
+        'RECAPTCHA_SITE_KEY_LOOKS_VALID': bool(site_key.startswith('6L')),
+        'RECAPTCHA_DEBUG': bool(getattr(settings, 'DEBUG', False)),
+    }

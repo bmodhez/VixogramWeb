@@ -8,7 +8,7 @@ from django.templatetags.static import static as static_url
 from a_core.firebase_views import firebase_messaging_sw
 
 urlpatterns = [
-    path('favicon.ico', RedirectView.as_view(url=static_url('favicon.jpeg'), permanent=True)),
+    path('favicon.ico', RedirectView.as_view(url=static_url('favicon.png'), permanent=True)),
     path('admin/', admin.site.urls),
     path('firebase-messaging-sw.js', firebase_messaging_sw, name='firebase-messaging-sw'),
     path('', include('a_rtchat.urls')),

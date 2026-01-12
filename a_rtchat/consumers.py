@@ -4,9 +4,12 @@ from django.http import Http404
 from django.template.loader import render_to_string
 from django.contrib.auth import get_user_model
 from django.conf import settings
+from django.core.cache import cache
+import os
 from django.db.models import Count
 from asgiref.sync import async_to_sync
 import json
+from a_users.badges import get_verified_user_ids
 from .models import *
 
 
@@ -47,8 +50,21 @@ from .rate_limit import (
 from .moderation import moderate_message
 from .channels_utils import chatroom_channel_group_name
 from .mentions import extract_mention_usernames, resolve_mentioned_users
+from .auto_badges import attach_auto_badges
+
+
+def _celery_broker_configured() -> bool:
+    try:
+        env_broker = (os.environ.get('CELERY_BROKER_URL') or '').strip()
+        settings_broker = (getattr(settings, 'CELERY_BROKER_URL', None) or '').strip()
+        return bool(env_broker or settings_broker)
+    except Exception:
+        return False
 from .models_read import ChatReadState
 from .models import Notification
+from .link_policy import contains_link
+from .link_preview import extract_first_http_url, fetch_link_preview
+from .room_policy import room_allows_links
 
 
 def _is_chat_blocked(user) -> bool:
@@ -59,7 +75,20 @@ def _is_chat_blocked(user) -> bool:
     try:
         if getattr(user, 'is_staff', False):
             return False
-        return bool(user.profile.chat_blocked)
+        uid = getattr(user, 'id', None)
+        if not uid:
+            return False
+
+        # IMPORTANT: do not trust `user.profile` here.
+        # In long-lived websocket consumers the profile relation can be cached,
+        # so block/unblock wouldn't apply in real-time. Always re-check the DB.
+        from a_users.models import Profile
+        val = (
+            Profile.objects.filter(user_id=uid)
+            .values_list('chat_blocked', flat=True)
+            .first()
+        )
+        return bool(val)
     except Exception:
         return False
 
@@ -270,6 +299,18 @@ class ChatroomConsumer(WebsocketConsumer):
         if not body:
             return
 
+        # Links are only allowed in private chats.
+        if contains_link(body) and not room_allows_links(self.chatroom):
+            try:
+                self.send(text_data=json.dumps({
+                    'type': 'error',
+                    'code': 'links_not_allowed',
+                    'message': 'Links are only allowed in private chats.',
+                }))
+            except Exception:
+                pass
+            return
+
         # AI moderation (Gemini) for WS-created messages.
         pending_moderation = None
         if (
@@ -447,13 +488,50 @@ class ChatroomConsumer(WebsocketConsumer):
             reply_to=reply_to,
         )
 
+        # Retention: keep only the newest messages per room (best-effort)
+        try:
+            from a_rtchat.retention import trim_chat_group_messages
+
+            trim_chat_group_messages(
+                chat_group_id=getattr(self.chatroom, 'id', 0),
+                keep_last=int(getattr(settings, 'CHAT_MAX_MESSAGES_PER_ROOM', 12000)),
+            )
+        except Exception:
+            pass
+
+        # Public chat bot (Natasha): reply occasionally, async.
+        try:
+            if (getattr(self.chatroom, 'group_name', '') == 'public-chat'):
+                from .natasha_bot import trigger_natasha_reply_after_commit, NATASHA_USERNAME
+
+                if getattr(self.user, 'username', '') != NATASHA_USERNAME:
+                    trigger_natasha_reply_after_commit(self.chatroom.id, message.id)
+        except Exception:
+            pass
+
+        # Best-effort link preview (kept intentionally lightweight).
+        try:
+            url = extract_first_http_url(body)
+            preview = fetch_link_preview(url) if url else None
+            if preview:
+                message.link_url = preview.url
+                message.link_title = preview.title
+                message.link_description = preview.description
+                message.link_image = preview.image
+                message.link_site_name = preview.site_name
+                message.save(update_fields=['link_url', 'link_title', 'link_description', 'link_image', 'link_site_name'])
+        except Exception:
+            pass
+
         # Mention notifications (per-user channel): @username
         try:
             usernames = extract_mention_usernames(body)
             if usernames:
                 mentioned = resolve_mentioned_users(usernames)
                 member_ids = None
-                if getattr(self.chatroom, 'group_name', '') != 'public-chat':
+                # Only restrict mentions to members in private rooms.
+                # Group chats are joinable/public, so allow tagging even if the user hasn't joined yet.
+                if bool(getattr(self.chatroom, 'is_private', False)):
                     member_ids = set(self.chatroom.members.values_list('id', flat=True))
 
                 preview = (body or '')[:140]
@@ -470,7 +548,7 @@ class ChatroomConsumer(WebsocketConsumer):
                         if should_persist_notification(
                             user_id=u.id,
                             chatroom_name=getattr(self.chatroom, 'group_name', self.chatroom_name) or self.chatroom_name,
-                        ):
+                        ) or bool(getattr(self.chatroom, 'is_private', False)):
                             Notification.objects.create(
                                 user=u,
                                 from_user=self.user,
@@ -498,12 +576,13 @@ class ChatroomConsumer(WebsocketConsumer):
                     try:
                         from a_users.tasks import send_mention_push_task
 
-                        send_mention_push_task.delay(
-                            u.id,
-                            from_username=getattr(self.user, 'username', '') or '',
-                            chatroom_name=getattr(self.chatroom, 'group_name', self.chatroom_name) or self.chatroom_name,
-                            preview=preview,
-                        )
+                        if _celery_broker_configured():
+                            send_mention_push_task.delay(
+                                u.id,
+                                from_username=getattr(self.user, 'username', '') or '',
+                                chatroom_name=getattr(self.chatroom, 'group_name', self.chatroom_name) or self.chatroom_name,
+                                preview=preview,
+                            )
                     except Exception:
                         pass
         except Exception:
@@ -549,7 +628,7 @@ class ChatroomConsumer(WebsocketConsumer):
                 try:
                     from a_rtchat.notifications import should_persist_notification
 
-                    if should_persist_notification(user_id=target_id, chatroom_name=room_name):
+                    if should_persist_notification(user_id=target_id, chatroom_name=room_name) or bool(getattr(self.chatroom, 'is_private', False)):
                         Notification.objects.create(
                             user_id=target_id,
                             from_user=self.user,
@@ -591,6 +670,7 @@ class ChatroomConsumer(WebsocketConsumer):
             return
         message_id = event['message_id']
         message = GroupMessage.objects.get(id=message_id)
+        attach_auto_badges([message], self.chatroom)
         reaction_emojis = _reaction_context_for(message, self.user)
 
         other_last_read_id = 0
@@ -613,6 +693,7 @@ class ChatroomConsumer(WebsocketConsumer):
             'chat_group': self.chatroom,
             'reaction_emojis': reaction_emojis,
             'other_last_read_id': other_last_read_id,
+            'verified_user_ids': get_verified_user_ids([getattr(message, 'author_id', None)]),
         }
         html = render_to_string("a_rtchat/chat_message.html", context=context)
         self.send(text_data=json.dumps({
@@ -638,6 +719,7 @@ class ChatroomConsumer(WebsocketConsumer):
         message = GroupMessage.objects.filter(id=message_id).first()
         if not message:
             return
+        attach_auto_badges([message], self.chatroom)
         reaction_emojis = _reaction_context_for(message, self.user)
 
         other_last_read_id = 0
@@ -660,6 +742,7 @@ class ChatroomConsumer(WebsocketConsumer):
             'chat_group': self.chatroom,
             'reaction_emojis': reaction_emojis,
             'other_last_read_id': other_last_read_id,
+            'verified_user_ids': get_verified_user_ids([getattr(message, 'author_id', None)]),
         }
         html = render_to_string("a_rtchat/chat_message.html", context=context)
         self.send(text_data=json.dumps({
@@ -727,6 +810,15 @@ class ChatroomConsumer(WebsocketConsumer):
         if event.get('author_id') == getattr(self.user, 'id', None):
             return
 
+        # DND: user should not receive call invites.
+        try:
+            from a_users.models import Profile
+
+            if Profile.objects.filter(user_id=getattr(self.user, 'id', None), is_dnd=True).exists():
+                return
+        except Exception:
+            pass
+
         self.send(text_data=json.dumps({
             'type': 'call_invite',
             'call_type': event.get('call_type') or 'voice',
@@ -749,6 +841,14 @@ class ChatroomConsumer(WebsocketConsumer):
 
     def call_control_handler(self, event):
         """Call control signals (e.g., end call for everyone)."""
+        # DND: user should not receive call UI events.
+        try:
+            from a_users.models import Profile
+
+            if Profile.objects.filter(user_id=getattr(self.user, 'id', None), is_dnd=True).exists():
+                return
+        except Exception:
+            pass
         self.send(text_data=json.dumps({
             'type': 'call_control',
             'action': event.get('action') or '',
@@ -759,16 +859,66 @@ class ChatroomConsumer(WebsocketConsumer):
         
         
 class OnlineStatusConsumer(WebsocketConsumer):
+    def _conn_key(self) -> str:
+        return f"online_status_conn:{getattr(self.user, 'id', 0)}"
+
+    def _inc_conn(self) -> int:
+        key = self._conn_key()
+        try:
+            val = cache.get(key)
+            if val is None:
+                cache.set(key, 1, timeout=60 * 60)
+                return 1
+            new_val = int(val) + 1
+            cache.set(key, new_val, timeout=60 * 60)
+            return new_val
+        except Exception:
+            try:
+                cache.set(key, 1, timeout=60 * 60)
+            except Exception:
+                pass
+            return 1
+
+    def _dec_conn(self) -> int:
+        key = self._conn_key()
+        try:
+            val = cache.get(key)
+            if val is None:
+                return 0
+            new_val = max(0, int(val) - 1)
+            if new_val <= 0:
+                cache.delete(key)
+            else:
+                cache.set(key, new_val, timeout=60 * 60)
+            return new_val
+        except Exception:
+            try:
+                cache.delete(key)
+            except Exception:
+                pass
+            return 0
+
     def connect(self):
         self.user = _resolve_authenticated_user(self.scope.get('user'))
         if not getattr(self.user, 'is_authenticated', False):
             self.close()
             return
         self.group_name = 'online-status'
-        self.group = get_object_or_404(ChatGroup, group_name=self.group_name)
-        
-        if self.user not in self.group.users_online.all():
-            self.group.users_online.add(self.user.pk)
+        try:
+            self.group, _ = ChatGroup.objects.get_or_create(group_name=self.group_name)
+        except Exception:
+            self.close()
+            return
+
+        # Connection counting prevents flicker when navigating (old socket closes
+        # after the new page opens a new socket).
+        new_count = self._inc_conn()
+        if new_count == 1:
+            try:
+                if self.user not in self.group.users_online.all():
+                    self.group.users_online.add(self.user.pk)
+            except Exception:
+                pass
             
         async_to_sync(self.channel_layer.group_add)(
             self.group_name, self.channel_name
@@ -779,8 +929,17 @@ class OnlineStatusConsumer(WebsocketConsumer):
         
         
     def disconnect(self, close_code):
-        if self.user in self.group.users_online.all():
-            self.group.users_online.remove(self.user.pk)
+        try:
+            new_count = self._dec_conn()
+        except Exception:
+            new_count = 0
+
+        if new_count <= 0:
+            try:
+                if self.user in self.group.users_online.all():
+                    self.group.users_online.remove(self.user.pk)
+            except Exception:
+                pass
             
         async_to_sync(self.channel_layer.group_discard)(
             self.group_name, self.channel_name
@@ -848,6 +1007,14 @@ class NotificationsConsumer(WebsocketConsumer):
             pass
 
     def call_invite_notify_handler(self, event):
+        # DND: user should not receive call invites.
+        try:
+            from a_users.models import Profile
+
+            if Profile.objects.filter(user_id=getattr(self.user, 'id', None), is_dnd=True).exists():
+                return
+        except Exception:
+            pass
         self.send(text_data=json.dumps({
             'type': 'call_invite',
             'call_type': event.get('call_type') or 'voice',
@@ -857,7 +1024,31 @@ class NotificationsConsumer(WebsocketConsumer):
             'call_event_url': event.get('call_event_url') or '',
         }))
 
+    def call_control_notify_handler(self, event):
+        # DND: user should not receive call UI events.
+        try:
+            from a_users.models import Profile
+
+            if Profile.objects.filter(user_id=getattr(self.user, 'id', None), is_dnd=True).exists():
+                return
+        except Exception:
+            pass
+        self.send(text_data=json.dumps({
+            'type': 'call_control',
+            'action': event.get('action') or '',
+            'from_username': event.get('from_username') or '',
+            'call_type': event.get('call_type') or 'voice',
+            'chatroom_name': event.get('chatroom_name') or '',
+        }))
+
     def mention_notify_handler(self, event):
+        try:
+            from a_users.models import Profile
+
+            if Profile.objects.filter(user_id=getattr(self.user, 'id', None), is_dnd=True).exists():
+                return
+        except Exception:
+            pass
         self.send(text_data=json.dumps({
             'type': 'mention',
             'from_username': event.get('from_username') or '',
@@ -867,6 +1058,13 @@ class NotificationsConsumer(WebsocketConsumer):
         }))
 
     def reply_notify_handler(self, event):
+        try:
+            from a_users.models import Profile
+
+            if Profile.objects.filter(user_id=getattr(self.user, 'id', None), is_dnd=True).exists():
+                return
+        except Exception:
+            pass
         self.send(text_data=json.dumps({
             'type': 'reply',
             'from_username': event.get('from_username') or '',
@@ -876,9 +1074,179 @@ class NotificationsConsumer(WebsocketConsumer):
         }))
 
     def follow_notify_handler(self, event):
+        try:
+            from a_users.models import Profile
+
+            if Profile.objects.filter(user_id=getattr(self.user, 'id', None), is_dnd=True).exists():
+                return
+        except Exception:
+            pass
         self.send(text_data=json.dumps({
             'type': 'follow',
             'from_username': event.get('from_username') or '',
             'url': event.get('url') or '',
             'preview': event.get('preview') or '',
+        }))
+
+    def chat_block_status_notify_handler(self, event):
+        try:
+            from a_users.models import Profile
+
+            if Profile.objects.filter(user_id=getattr(self.user, 'id', None), is_dnd=True).exists():
+                return
+        except Exception:
+            pass
+
+        self.send(text_data=json.dumps({
+            'type': 'chat_block_status',
+            'blocked': bool(event.get('blocked')),
+            'by_username': event.get('by_username') or '',
+        }))
+
+
+class ProfilePresenceConsumer(WebsocketConsumer):
+    """Realtime online/offline for a single user's profile page."""
+
+    def connect(self):
+        self.user = _resolve_authenticated_user(self.scope.get('user'))
+        if not getattr(self.user, 'is_authenticated', False):
+            self.close()
+            return
+
+        username = None
+        try:
+            username = (self.scope.get('url_route', {})
+                        .get('kwargs', {})
+                        .get('username'))
+        except Exception:
+            username = None
+
+        if not username:
+            self.close()
+            return
+
+        try:
+            target = get_object_or_404(User, username=username)
+        except Exception:
+            self.close()
+            return
+
+        target_profile = getattr(target, 'profile', None)
+        is_bot = bool(getattr(target_profile, 'is_bot', False))
+        is_stealth = bool(getattr(target_profile, 'is_stealth', False))
+        is_owner = bool(getattr(self.user, 'id', None) == getattr(target, 'id', None))
+
+        self.target_id = getattr(target, 'id', None)
+        self.group_name = 'online-status'
+        self.is_owner = bool(is_owner)
+
+        self.accept()
+
+        # Bots: don't expose presence.
+        if is_bot:
+            try:
+                self.send(text_data=json.dumps({'type': 'presence', 'online': False}))
+            except Exception:
+                pass
+            try:
+                self.close()
+            except Exception:
+                pass
+            return
+
+        # Stealth: everyone except owner sees offline (no realtime subscription).
+        if is_stealth and not is_owner:
+            try:
+                self.send(text_data=json.dumps({'type': 'presence', 'online': False}))
+            except Exception:
+                pass
+            try:
+                self.close()
+            except Exception:
+                pass
+            return
+
+        # Subscribe to online-status updates and re-check visibility rules on every event.
+        try:
+            async_to_sync(self.channel_layer.group_add)(
+                self.group_name, self.channel_name
+            )
+        except Exception:
+            pass
+
+        # Initial state
+        try:
+            online = ChatGroup.objects.filter(group_name='online-status', users_online=target).exists()
+        except Exception:
+            online = False
+        try:
+            self.send(text_data=json.dumps({'type': 'presence', 'online': bool(online)}))
+        except Exception:
+            pass
+
+    def disconnect(self, close_code):
+        try:
+            if getattr(self, 'group_name', None):
+                async_to_sync(self.channel_layer.group_discard)(
+                    self.group_name, self.channel_name
+                )
+        except Exception:
+            pass
+
+    def online_status_handler(self, event):
+        """Recompute target's visible online state whenever the global presence changes."""
+        try:
+            from a_users.models import Profile
+
+            prof = (
+                Profile.objects
+                .filter(user_id=self.target_id)
+                .values('is_stealth', 'is_bot')
+                .first()
+                or {}
+            )
+            is_bot = bool(prof.get('is_bot', False))
+            is_stealth = bool(prof.get('is_stealth', False))
+
+            # Bots: don't expose presence.
+            if is_bot:
+                try:
+                    self.send(text_data=json.dumps({'type': 'presence', 'online': False}))
+                except Exception:
+                    pass
+                try:
+                    self.close()
+                except Exception:
+                    pass
+                return
+
+            # Stealth: everyone except owner sees offline.
+            if is_stealth and not bool(getattr(self, 'is_owner', False)):
+                try:
+                    self.send(text_data=json.dumps({'type': 'presence', 'online': False}))
+                except Exception:
+                    pass
+                try:
+                    self.close()
+                except Exception:
+                    pass
+                return
+
+            online = bool(ChatGroup.objects.filter(group_name='online-status', users_online_id=self.target_id).exists())
+            self.send(text_data=json.dumps({'type': 'presence', 'online': online}))
+        except Exception:
+            return
+
+    def chat_block_status_notify_handler(self, event):
+        try:
+            from a_users.models import Profile
+
+            if Profile.objects.filter(user_id=getattr(self.user, 'id', None), is_dnd=True).exists():
+                return
+        except Exception:
+            pass
+        self.send(text_data=json.dumps({
+            'type': 'chat_block_status',
+            'blocked': bool(event.get('blocked')),
+            'by_username': event.get('by_username') or '',
         }))

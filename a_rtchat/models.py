@@ -20,6 +20,7 @@ class ChatGroup(models.Model):
     is_code_room = models.BooleanField(default=False)
     room_code = models.CharField(max_length=16, unique=True, null=True, blank=True, db_index=True)
     code_room_name = models.CharField(max_length=128, null=True, blank=True)
+    pinned_message = models.TextField(blank=True, default='')
     
     def __str__(self):
         return self.group_name
@@ -55,6 +56,11 @@ class GroupMessage(models.Model):
     body = models.CharField(max_length=300, blank=True, null=True)
     file = models.FileField(upload_to='files/', blank=True, null=True)
     file_caption = models.CharField(max_length=300, blank=True, null=True)
+    link_url = models.URLField(max_length=500, blank=True, default='')
+    link_title = models.CharField(max_length=300, blank=True, default='')
+    link_description = models.CharField(max_length=500, blank=True, default='')
+    link_image = models.URLField(max_length=500, blank=True, default='')
+    link_site_name = models.CharField(max_length=120, blank=True, default='')
     created = models.DateTimeField(auto_now_add=True)
     edited_at = models.DateTimeField(null=True, blank=True)
     
@@ -82,9 +88,9 @@ class GroupMessage(models.Model):
     @property    
     def is_image(self):
         try:
-            image = Image.open(self.file) 
+            image = Image.open(self.file)
             image.verify()
-            return True 
+            return True
         except:
             return False
 

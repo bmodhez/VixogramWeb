@@ -1,5 +1,6 @@
 from pathlib import Path
 import os
+
 from urllib.parse import urlparse
 import dj_database_url
 from django.core.exceptions import ImproperlyConfigured
@@ -28,6 +29,20 @@ except Exception:
     pass
 
 
+# --- Groq (OpenAI-compatible) settings for Natasha bot ---
+# IMPORTANT: Do NOT hardcode API keys in code. Set via environment.
+# NOTE: These must be computed AFTER .env is loaded.
+GROQ_API_KEY = (os.environ.get('GROQ_API_KEY') or '').strip()
+GROQ_MODEL = (os.environ.get('GROQ_MODEL') or 'openai/gpt-oss-120b').strip() or 'openai/gpt-oss-120b'
+
+# --- OpenRouter (OpenAI-compatible) settings for Natasha bot ---
+OPENROUTER_API_KEY = (os.environ.get('OPENROUTER_API_KEY') or '').strip()
+OPENROUTER_MODEL = (
+    (os.environ.get('OPENROUTER_MODEL') or 'meta-llama/llama-3.2-3b-instruct:free').strip()
+    or 'meta-llama/llama-3.2-3b-instruct:free'
+)
+
+
 # Detect Render platform early (used to pick safer defaults)
 IS_RENDER = bool((os.environ.get('RENDER_EXTERNAL_URL') or '').strip() or (os.environ.get('RENDER') or '').strip())
 
@@ -50,6 +65,62 @@ def _origin_from_url(url: str) -> str | None:
 
 
 ENVIRONMENT = (os.environ.get("ENVIRONMENT") or ("production" if IS_RENDER else "development")).strip().lower()
+
+# Public contact info (shown in navbar + support page)
+CONTACT_EMAIL = (os.environ.get('CONTACT_EMAIL') or '').strip()
+CONTACT_INSTAGRAM_URL = (
+    (os.environ.get('CONTACT_INSTAGRAM_URL') or 'https://www.instagram.com/bhavinmodhh/').strip()
+)
+
+# Google reCAPTCHA (Signup protection)
+# IMPORTANT: Do NOT hardcode keys in code. Use environment vars or local .env.
+#
+# Supports:
+# - v2 checkbox (default)
+# - v3 (score-based, no visible checkbox)
+# - enterprise script/verify endpoint (optional)
+RECAPTCHA_SITE_KEY = (os.environ.get('RECAPTCHA_SITE_KEY') or '').strip()
+RECAPTCHA_SECRET_KEY = (os.environ.get('RECAPTCHA_SECRET_KEY') or '').strip()
+
+RECAPTCHA_PROVIDER = (os.environ.get('RECAPTCHA_PROVIDER') or 'standard').strip().lower()
+if RECAPTCHA_PROVIDER not in {'standard', 'enterprise'}:
+    RECAPTCHA_PROVIDER = 'standard'
+
+RECAPTCHA_VERSION = (os.environ.get('RECAPTCHA_VERSION') or 'v2').strip().lower()
+if RECAPTCHA_VERSION not in {'v2', 'v3'}:
+    RECAPTCHA_VERSION = 'v2'
+
+_default_verify_url = (
+    'https://www.google.com/recaptcha/enterprise/siteverify'
+    if RECAPTCHA_PROVIDER == 'enterprise'
+    else 'https://www.google.com/recaptcha/api/siteverify'
+)
+RECAPTCHA_VERIFY_URL = (os.environ.get('RECAPTCHA_VERIFY_URL') or _default_verify_url).strip()
+RECAPTCHA_TIMEOUT_SECONDS = float(os.environ.get('RECAPTCHA_TIMEOUT_SECONDS') or 4.0)
+
+# v3-only settings
+RECAPTCHA_ACTION = (os.environ.get('RECAPTCHA_ACTION') or 'signup').strip() or 'signup'
+RECAPTCHA_MIN_SCORE = float(os.environ.get('RECAPTCHA_MIN_SCORE') or 0.5)
+
+# Script URL used by templates
+_recaptcha_script_base = (
+    'https://www.google.com/recaptcha/enterprise.js'
+    if RECAPTCHA_PROVIDER == 'enterprise'
+    else 'https://www.google.com/recaptcha/api.js'
+)
+if RECAPTCHA_VERSION == 'v3' and RECAPTCHA_SITE_KEY:
+    RECAPTCHA_SCRIPT_URL = f"{_recaptcha_script_base}?render={RECAPTCHA_SITE_KEY}"
+else:
+    RECAPTCHA_SCRIPT_URL = _recaptcha_script_base
+
+RECAPTCHA_ENABLED = _env_bool('RECAPTCHA_ENABLED', default=bool(RECAPTCHA_SITE_KEY and RECAPTCHA_SECRET_KEY))
+
+# Whether signup must pass reCAPTCHA verification.
+# Default: only require in production when reCAPTCHA is enabled.
+RECAPTCHA_REQUIRED = _env_bool(
+    'RECAPTCHA_REQUIRED',
+    default=bool(RECAPTCHA_ENABLED and ENVIRONMENT == 'production'),
+)
 
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.environ.get(
@@ -274,7 +345,10 @@ TEMPLATES = [
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
                 'a_core.context_processors.firebase_config',
+                'a_core.context_processors.site_contact',
+                'a_core.context_processors.recaptcha_config',
                 'a_users.context_processors.notifications_badge',
+                'a_rtchat.context_processors.admin_reports_badge',
             ],
         },
     },
@@ -284,6 +358,39 @@ ASGI_APPLICATION = 'a_core.asgi.application'
 
 # Render ya Railway par ye variables environment se uthayenge
 REDIS_URL = os.environ.get('REDIS_URL')
+
+# --- Cache / sessions (important for scale) ---
+# Rate limiting and other anti-abuse features rely on Django's cache.
+# If you scale to multiple processes/instances, you should use a shared cache
+# (Redis) so limits and mutes are consistent across all workers.
+USE_REDIS_CACHE = _env_bool(
+    'USE_REDIS_CACHE',
+    default=(ENVIRONMENT == 'production' and bool((REDIS_URL or '').strip())),
+)
+
+if USE_REDIS_CACHE and REDIS_URL:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+            'LOCATION': REDIS_URL,
+            'OPTIONS': {
+                'socket_connect_timeout': float(os.environ.get('REDIS_CONNECT_TIMEOUT', '1.0')),
+                'socket_timeout': float(os.environ.get('REDIS_SOCKET_TIMEOUT', '1.5')),
+                'retry_on_timeout': True,
+            },
+        }
+    }
+    # Use cache-backed sessions with DB fallback (safer than pure cache sessions).
+    SESSION_ENGINE = 'django.contrib.sessions.backends.cached_db'
+    SESSION_CACHE_ALIAS = 'default'
+else:
+    # Local/dev fallback (single-process friendly)
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+            'LOCATION': 'vixogram-locmem',
+        }
+    }
 
 # Local/dev: don't depend on Redis (prevents WS disconnects when Redis isn't running).
 if ENVIRONMENT == 'production' and REDIS_URL:
@@ -314,6 +421,13 @@ if ENVIRONMENT == 'production':
     DATABASES = {
         'default': dj_database_url.parse(_database_url)
     }
+
+    # Keep DB connections open briefly to reduce connection churn under load.
+    # (Most managed Postgres services recommend this.)
+    try:
+        DATABASES['default'].setdefault('CONN_MAX_AGE', int(os.environ.get('DB_CONN_MAX_AGE', '60')))
+    except Exception:
+        DATABASES['default']['CONN_MAX_AGE'] = 60
 else:
     DATABASES = {
         'default': {
@@ -324,7 +438,12 @@ else:
 # Static & Media Files
 # Use leading slashes so URLs resolve correctly from nested routes (e.g. /chat/room/...)
 STATIC_URL = '/static/'
-STATICFILES_DIRS = [ BASE_DIR / 'static' ]
+STATICFILES_DIRS = [
+    BASE_DIR / 'static',
+    # Allows serving assets committed under frontend/public/static (e.g. incoming.wav)
+    # without copying them into the Django static folder.
+    BASE_DIR / 'frontend' / 'public' / 'static',
+]
 
 # --- Abuse prevention / rate limiting defaults (override via env or settings) ---
 # Auth (accounts/* POST)
@@ -351,6 +470,12 @@ PASTE_LONG_MSG_LEN = int(os.environ.get('PASTE_LONG_MSG_LEN', '60'))
 PASTE_TYPED_MS_MAX = int(os.environ.get('PASTE_TYPED_MS_MAX', '400'))
 TYPING_CPS_THRESHOLD = int(os.environ.get('TYPING_CPS_THRESHOLD', '25'))
 SPEED_SPAM_TTL = int(os.environ.get('SPEED_SPAM_TTL', '10'))
+
+# Notifications persistence
+#
+# If False, some in-app notifications are only sent via websocket toasts when
+# the recipient is online, which can make the dropdown look empty.
+PERSIST_NOTIFICATIONS_WHEN_ONLINE = _env_bool('PERSIST_NOTIFICATIONS_WHEN_ONLINE', default=True)
 
 # Fast long message heuristic (server-side)
 FAST_LONG_MSG_LEN = int(os.environ.get('FAST_LONG_MSG_LEN', '80'))
@@ -467,8 +592,13 @@ ACCOUNT_LOGIN_METHODS = {'email', 'username'}
 # - When unchecked: session expires on browser close
 ACCOUNT_SESSION_REMEMBER = None
 
-# Make sure browser-close expiry doesn't override remember-me.
-SESSION_EXPIRE_AT_BROWSER_CLOSE = False
+# Default behavior when the user does NOT check remember-me.
+# Allauth will override this per-session when remember-me is checked.
+SESSION_EXPIRE_AT_BROWSER_CLOSE = True
+
+# Default persistent-session duration (used when remember-me is checked).
+# Django's default is 1209600 seconds (14 days). Keep that as default but make it configurable.
+SESSION_COOKIE_AGE = int(os.environ.get('SESSION_COOKIE_AGE', '1209600'))
 
 # Allauth email verification (anti-spam)
 # - New users must verify email before they can use the account.

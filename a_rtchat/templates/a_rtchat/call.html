@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% load static %}
 
 {% block content %}
 <div class="max-w-5xl mx-auto">
@@ -8,7 +9,7 @@
                 <div class="text-sm text-gray-300">{% if call_type == 'video' %}Video call{% else %}Voice call{% endif %}</div>
                 <div class="text-xs text-gray-500">Room: {{ chatroom_name }}</div>
             </div>
-            <a href="{% url 'chatroom' chatroom_name %}" class="text-sm bg-gray-800 hover:bg-gray-700 text-white px-4 py-2 rounded-lg transition-colors">
+            <a id="call_end_back" href="{% url 'chatroom' chatroom_name %}" class="text-sm bg-gray-800 hover:bg-gray-700 text-white px-4 py-2 rounded-lg transition-colors">
                 End / Back
             </a>
         </div>
@@ -17,29 +18,31 @@
             <div class="flex items-start justify-between gap-4 mb-4">
                 <div>
                     <div id="call-phase" class="text-sm text-gray-200">Calling…</div>
+                    <div id="call-loading" class="mt-2 hidden items-center gap-2 text-xs text-gray-300">
+                        <div class="w-4 h-4 rounded-full border-2 border-gray-600 border-t-emerald-500 animate-spin"></div>
+                        <span id="call-loading-text">Loading…</span>
+                    </div>
                     <div class="text-xs text-gray-500 mt-1">Participants: <span id="participants-count">1</span></div>
                 </div>
                 <div class="text-right">
                     <div class="text-xs text-gray-500">In call</div>
                     <div id="participants-names" class="text-xs text-gray-300 mt-1">You</div>
+                    <div class="mt-2">
+                        <div class="text-xs text-gray-500">Free time left</div>
+                        <div id="free-limit-timer" class="text-xs text-gray-200 mt-1 tabular-nums">--:--</div>
+                    </div>
                 </div>
             </div>
 
             {% if call_type == 'video' %}
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div class="rounded-xl border border-gray-800 bg-gray-950/40 p-3">
-                        <div class="text-xs text-gray-400 mb-2">You</div>
-                        <div id="local-player" class="w-full aspect-video bg-black/40 rounded-lg"></div>
-                    </div>
-                    <div class="rounded-xl border border-gray-800 bg-gray-950/40 p-3">
-                        <div class="text-xs text-gray-400 mb-2">Other</div>
-                        <div id="remote-player" class="w-full aspect-video bg-black/40 rounded-lg"></div>
-                    </div>
+                <div class="rounded-xl border border-gray-800 bg-gray-950/40 p-3">
+                    <div class="text-xs text-gray-400 mb-2">Participants</div>
+                    <div id="video-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3"></div>
                 </div>
             {% else %}
-                <div class="rounded-xl border border-gray-800 bg-gray-950/40 p-4">
-                    <div class="text-sm text-gray-200">Call connected…</div>
-                    <div class="text-xs text-gray-500 mt-1">Keep this tab open.</div>
+                <div class="rounded-xl border border-gray-800 bg-gray-950/40 p-3">
+                    <div class="text-xs text-gray-400 mb-2">Participants</div>
+                    <div id="voice-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3"></div>
                 </div>
             {% endif %}
 
@@ -48,7 +51,31 @@
     </div>
 </div>
 
+<div id="free-limit-popup" class="fixed inset-0 hidden items-center justify-center bg-black/60 z-50">
+    <div class="w-full max-w-sm mx-4 rounded-2xl border border-gray-800 bg-gray-900 p-5">
+        <div class="text-sm text-gray-100 font-semibold">Free limit reached</div>
+        <div class="text-xs text-gray-400 mt-1">Your call will end now.</div>
+    </div>
+</div>
+
 <script src="https://download.agora.io/sdk/release/AgoraRTC_N.js"></script>
+<script id="vixo-call-config" type="application/json">
+{
+    "callType": "{{ call_type|escapejs }}",
+    "channel": "{{ chatroom_name|escapejs }}",
+    "callRole": "{{ call_role|escapejs }}",
+    "currentUsername": "{{ user.username|escapejs }}",
+    "tokenUrl": "{% url 'agora-token' chatroom_name %}",
+    "presenceUrl": "{% url 'chat-call-presence' chatroom_name %}",
+    "callEventUrl": "{% url 'chat-call-event' chatroom_name %}",
+    "backUrl": "{% url 'chatroom' chatroom_name %}",
+    "memberUsernames": {{ member_usernames|safe }}
+}
+</script>
+
+<script src="{% static 'js/call.js' %}" defer></script>
+
+{% comment %}
 <script>
 (function () {
     const callType = "{{ call_type|escapejs }}";
@@ -65,10 +92,82 @@
     const phaseEl = document.getElementById('call-phase');
     const countEl = document.getElementById('participants-count');
     const namesEl = document.getElementById('participants-names');
+    const freeLimitTimerEl = document.getElementById('free-limit-timer');
+    const freeLimitPopupEl = document.getElementById('free-limit-popup');
+    const loadingEl = document.getElementById('call-loading');
+    const loadingTextEl = document.getElementById('call-loading-text');
 
     const statusEl = document.getElementById('call-status');
     const setStatus = (t) => { if (statusEl) statusEl.textContent = t; };
     const setPhase = (t) => { if (phaseEl) phaseEl.textContent = t; };
+
+    function showLoading(text) {
+        if (!loadingEl) return;
+        if (loadingTextEl) loadingTextEl.textContent = text || 'Loading…';
+        loadingEl.classList.remove('hidden');
+        loadingEl.classList.add('flex');
+    }
+
+    function hideLoading() {
+        if (!loadingEl) return;
+        loadingEl.classList.add('hidden');
+        loadingEl.classList.remove('flex');
+    }
+
+    // --- Free call limit ---
+    // Voice: 4 min, Video: 2 min
+    const FREE_LIMIT_SECONDS = (callType === 'video') ? 2 * 60 : 4 * 60;
+    let freeLimitDeadlineMs = null;
+    let freeLimitInterval = null;
+    let freeLimitStarted = false;
+
+    function formatMMSS(totalSeconds) {
+        const s = Math.max(0, Number(totalSeconds || 0));
+        const mm = String(Math.floor(s / 60)).padStart(2, '0');
+        const ss = String(Math.floor(s % 60)).padStart(2, '0');
+        return `${mm}:${ss}`;
+    }
+
+    function setFreeLimitTimer(secondsLeft) {
+        if (!freeLimitTimerEl) return;
+        freeLimitTimerEl.textContent = formatMMSS(secondsLeft);
+    }
+
+    function showFreeLimitPopup() {
+        if (!freeLimitPopupEl) return;
+        freeLimitPopupEl.classList.remove('hidden');
+        freeLimitPopupEl.classList.add('flex');
+    }
+
+    function stopFreeLimitCountdown() {
+        if (freeLimitInterval) {
+            clearInterval(freeLimitInterval);
+            freeLimitInterval = null;
+        }
+    }
+
+    function startFreeLimitCountdown() {
+        if (freeLimitStarted) return;
+        freeLimitStarted = true;
+
+        freeLimitDeadlineMs = Date.now() + (FREE_LIMIT_SECONDS * 1000);
+        setFreeLimitTimer(FREE_LIMIT_SECONDS);
+
+        freeLimitInterval = setInterval(() => {
+            const remainingMs = Math.max(0, freeLimitDeadlineMs - Date.now());
+            const remainingSeconds = Math.ceil(remainingMs / 1000);
+            setFreeLimitTimer(remainingSeconds);
+            if (remainingSeconds <= 0) {
+                stopFreeLimitCountdown();
+                // End immediately; keep popup visible briefly before redirect.
+                showFreeLimitPopup();
+                hangupAndExit('Free limit reached', { redirectDelayMs: 1200, sendEndEvent: true });
+            }
+        }, 250);
+    }
+
+    // Set initial display so user always sees the limit.
+    setFreeLimitTimer(FREE_LIMIT_SECONDS);
 
     const client = AgoraRTC.createClient({ mode: 'rtc', codec: 'vp8' });
 
@@ -99,6 +198,157 @@
     const participants = new Map();
     participants.set('me', 'You');
 
+    // Remote video containers (uid -> { cardEl, playerEl, labelEl })
+    const remoteCards = new Map();
+    // Voice participant cards (uid -> { cardEl, labelEl })
+    const voiceCards = new Map();
+
+    function getVideoGrid() {
+        return document.getElementById('video-grid');
+    }
+
+    function getVoiceGrid() {
+        return document.getElementById('voice-grid');
+    }
+
+    function ensureLocalTile() {
+        if (callType === 'video') {
+            const grid = getVideoGrid();
+            if (!grid) return;
+            if (document.getElementById('local-player')) return;
+
+            const card = document.createElement('div');
+            card.className = 'rounded-lg border border-gray-800 bg-black/20 p-2';
+
+            const label = document.createElement('div');
+            label.className = 'text-[11px] text-gray-400 mb-2 truncate';
+            label.textContent = 'You';
+
+            const player = document.createElement('div');
+            player.id = 'local-player';
+            player.className = 'w-full aspect-video bg-black/40 rounded-md overflow-hidden';
+
+            card.appendChild(label);
+            card.appendChild(player);
+            grid.appendChild(card);
+        } else {
+            const grid = getVoiceGrid();
+            if (!grid) return;
+            if (document.getElementById('local-voice-tile')) return;
+
+            const card = document.createElement('div');
+            card.id = 'local-voice-tile';
+            card.className = 'rounded-lg border border-gray-800 bg-black/20 p-3 flex items-center justify-between gap-3';
+
+            const left = document.createElement('div');
+            const label = document.createElement('div');
+            label.className = 'text-sm text-gray-200 truncate';
+            label.textContent = 'You';
+            const sub = document.createElement('div');
+            sub.className = 'text-[11px] text-gray-500 mt-0.5';
+            sub.textContent = 'Voice connected';
+            left.appendChild(label);
+            left.appendChild(sub);
+
+            const badge = document.createElement('div');
+            badge.className = 'text-[11px] px-2 py-1 rounded-md border border-gray-800 bg-gray-950/40 text-gray-300';
+            badge.textContent = 'Mic';
+
+            card.appendChild(left);
+            card.appendChild(badge);
+            grid.appendChild(card);
+        }
+    }
+
+    function removeRemoteCard(uid) {
+        const key = String(uid);
+        const entry = remoteCards.get(key);
+        if (!entry) return;
+        try { entry.playerEl.innerHTML = ''; } catch {}
+        try { entry.cardEl.remove(); } catch {}
+        remoteCards.delete(key);
+    }
+
+    function removeVoiceCard(uid) {
+        const key = String(uid);
+        const entry = voiceCards.get(key);
+        if (!entry) return;
+        try { entry.cardEl.remove(); } catch {}
+        voiceCards.delete(key);
+    }
+
+    function setRemotePlaceholder(uid, text) {
+        const key = String(uid);
+        const entry = remoteCards.get(key);
+        if (!entry) return;
+        entry.playerEl.innerHTML = '';
+        const msg = document.createElement('div');
+        msg.className = 'w-full h-full flex items-center justify-center text-xs text-gray-400';
+        msg.textContent = text;
+        entry.playerEl.appendChild(msg);
+    }
+
+    function ensureRemoteCard(uid) {
+        const grid = getVideoGrid();
+        if (!grid || !uid) return null;
+        const key = String(uid);
+        const existing = remoteCards.get(key);
+        if (existing) return existing;
+
+        const card = document.createElement('div');
+        card.className = 'rounded-lg border border-gray-800 bg-black/20 p-2';
+
+        const label = document.createElement('div');
+        label.className = 'text-[11px] text-gray-400 mb-2 truncate';
+        label.textContent = participants.get(key) || `User ${key}`;
+
+        const player = document.createElement('div');
+        player.id = `remote-player-${key}`;
+        player.className = 'w-full aspect-video bg-black/40 rounded-md overflow-hidden';
+
+        card.appendChild(label);
+        card.appendChild(player);
+        grid.appendChild(card);
+
+        const entry = { cardEl: card, playerEl: player, labelEl: label };
+        remoteCards.set(key, entry);
+        setRemotePlaceholder(uid, 'Waiting for video…');
+        return entry;
+    }
+
+    function ensureVoiceCard(uid) {
+        const grid = getVoiceGrid();
+        if (!grid || !uid) return null;
+        const key = String(uid);
+        const existing = voiceCards.get(key);
+        if (existing) return existing;
+
+        const card = document.createElement('div');
+        card.className = 'rounded-lg border border-gray-800 bg-black/20 p-3 flex items-center justify-between gap-3';
+
+        const left = document.createElement('div');
+        const label = document.createElement('div');
+        label.className = 'text-sm text-gray-200 truncate';
+        label.textContent = participants.get(key) || `User ${key}`;
+        const sub = document.createElement('div');
+        sub.className = 'text-[11px] text-gray-500 mt-0.5';
+        sub.textContent = 'In voice call';
+        left.appendChild(label);
+        left.appendChild(sub);
+
+        const badge = document.createElement('div');
+        badge.className = 'text-[11px] px-2 py-1 rounded-md border border-gray-800 bg-gray-950/40 text-gray-300';
+        badge.textContent = 'Mic';
+
+        card.appendChild(left);
+        card.appendChild(badge);
+        grid.appendChild(card);
+
+        const entry = { cardEl: card, labelEl: label };
+        voiceCards.set(key, entry);
+        return entry;
+    }
+
     const otherUsername = (Array.isArray(memberUsernames) && memberUsernames.length === 2)
         ? (memberUsernames.find((u) => u && u !== currentUsername) || '')
         : '';
@@ -111,6 +361,12 @@
         // For 1:1 rooms we can reliably map to the "other" username.
         participants.set(key, otherUsername || `User ${key}`);
         renderParticipants();
+        // Ensure there's a UI tile for this participant.
+        if (callType === 'video') {
+            ensureRemoteCard(uid);
+        } else {
+            ensureVoiceCard(uid);
+        }
     }
 
     function renderParticipants() {
@@ -122,8 +378,20 @@
         if (countEl) countEl.textContent = String(Math.max(1, 1 + others.length));
         // Right-side "In call" list should show only other joined users.
         if (namesEl) namesEl.textContent = others.length ? others.join(', ') : 'Waiting…';
+
+        // Update card labels (best-effort)
+        for (const [uid, entry] of remoteCards.entries()) {
+            try { entry.labelEl.textContent = participants.get(uid) || `User ${uid}`; } catch {}
+        }
+
+        for (const [uid, entry] of voiceCards.entries()) {
+            try { entry.labelEl.textContent = participants.get(uid) || `User ${uid}`; } catch {}
+        }
     }
     renderParticipants();
+
+    // Render local tile immediately so layout is correct before media starts.
+    ensureLocalTile();
 
     function getCsrf() {
         try { return (typeof getCookie === 'function' ? getCookie('csrftoken') : ''); } catch { return ''; }
@@ -250,13 +518,19 @@
         tryPlayAllRemoteAudio();
     }, { passive: true });
 
-    async function hangupAndExit(reason) {
+    async function hangupAndExit(reason, opts) {
+        const options = opts || {};
         if (remoteEnded) return;
         remoteEnded = true;
         endSent = true;
         stopOutgoingRing();
+        stopFreeLimitCountdown();
         setPhase('Call ended');
         if (reason) setStatus(reason);
+
+        if (options && options.sendEndEvent) {
+            try { await postCallEvent('end'); } catch { /* ignore */ }
+        }
 
         try {
             if (localTracks.video) {
@@ -272,7 +546,13 @@
         try { await client.leave(); } catch {}
         try { if (presenceWs) presenceWs.close(); } catch {}
 
-        window.location.href = "{% url 'chatroom' chatroom_name %}";
+        const redirect = () => { window.location.href = "{% url 'chatroom' chatroom_name %}"; };
+        const delay = Number(options && options.redirectDelayMs ? options.redirectDelayMs : 0);
+        if (delay > 0) {
+            setTimeout(redirect, delay);
+        } else {
+            redirect();
+        }
     }
 
     function connectPresenceWs() {
@@ -293,8 +573,14 @@
 
                     if (action === 'leave') {
                         participants.delete(String(uid));
+                        if (callType === 'video') {
+                            removeRemoteCard(uid);
+                        } else {
+                            removeVoiceCard(uid);
+                        }
                     } else {
                         participants.set(String(uid), username);
+                        ensureRemoteParticipant(uid);
                     }
                     renderParticipants();
                     // In-call only when at least one other participant is present.
@@ -337,11 +623,15 @@
 
     async function join() {
         try {
+            showLoading('Connecting…');
             connectPresenceWs();
             setPhase('Calling…');
             setStatus('Connecting…');
+            showLoading('Fetching access…');
             const { token, uid, app_id } = await fetchToken();
             if (!ensureAppIdPresent(app_id)) return;
+
+            showLoading('Joining call…');
 
             // Start outgoing ring once user is on the call page.
             playOutgoingRing();
@@ -350,8 +640,11 @@
                 try { ensureRemoteParticipant(user && user.uid); } catch { /* ignore */ }
                 await client.subscribe(user, mediaType);
                 if (mediaType === 'video') {
-                    const remoteContainer = document.getElementById('remote-player');
-                    if (remoteContainer) user.videoTrack.play(remoteContainer);
+                    const card = ensureRemoteCard(user && user.uid);
+                    if (card && user.videoTrack) {
+                        try { card.playerEl.innerHTML = ''; } catch {}
+                        user.videoTrack.play(card.playerEl);
+                    }
                 }
                 if (mediaType === 'audio') {
                     try {
@@ -364,18 +657,31 @@
                 }
             });
 
-            client.on('user-unpublished', () => {
-                // No special UI cleanup needed for this minimal page
+            client.on('user-unpublished', (user, mediaType) => {
+                if (!user) return;
+                if (mediaType === 'video') {
+                    setRemotePlaceholder(user.uid, 'Video off');
+                }
+                if (mediaType === 'audio') {
+                    try { remoteAudioTracks.delete(String(user.uid)); } catch { /* ignore */ }
+                }
             });
 
             client.on('user-left', (user) => {
                 try { remoteAudioTracks.delete(String(user.uid)); } catch { /* ignore */ }
                 try { participants.delete(String(user.uid)); } catch { /* ignore */ }
+                try { removeRemoteCard(user.uid); } catch { /* ignore */ }
+                try { removeVoiceCard(user.uid); } catch { /* ignore */ }
                 renderParticipants();
             });
 
             client.on('user-joined', (user) => {
                 try { ensureRemoteParticipant(user && user.uid); } catch { /* ignore */ }
+                if (callType === 'video') {
+                    try { ensureRemoteCard(user && user.uid); } catch { /* ignore */ }
+                } else {
+                    try { ensureVoiceCard(user && user.uid); } catch { /* ignore */ }
+                }
                 setPhase('In call');
                 stopOutgoingRing();
             });
@@ -395,6 +701,7 @@
             }
 
             // Local tracks
+            showLoading('Starting microphone…');
             localTracks.audio = await AgoraRTC.createMicrophoneAudioTrack({
                 AEC: true,
                 AGC: true,
@@ -403,20 +710,36 @@
             try { await localTracks.audio.setEnabled(true); } catch { /* ignore */ }
 
             if (callType === 'video') {
-                localTracks.video = await AgoraRTC.createCameraVideoTrack();
-                const localContainer = document.getElementById('local-player');
-                if (localContainer) localTracks.video.play(localContainer);
-                await client.publish([localTracks.audio, localTracks.video]);
+                try {
+                    showLoading('Starting camera…');
+                    localTracks.video = await AgoraRTC.createCameraVideoTrack();
+                    const localContainer = document.getElementById('local-player');
+                    if (localContainer) localTracks.video.play(localContainer);
+                    showLoading('Publishing media…');
+                    await client.publish([localTracks.audio, localTracks.video]);
+                } catch (err) {
+                    // Common on Windows/Chrome when testing multiple tabs on the same PC (camera already in use)
+                    // or when permissions are denied.
+                    setStatus('Camera not available. Joining audio-only. (Tip: only 1 tab/device can use the camera at a time)');
+                    showLoading('Publishing audio…');
+                    await client.publish([localTracks.audio]);
+                }
             } else {
+                showLoading('Publishing audio…');
                 await client.publish([localTracks.audio]);
             }
 
             setStatus('Connected (mic published)');
+            hideLoading();
+
+            // Start free-limit countdown after we successfully join + publish.
+            startFreeLimitCountdown();
 
             // If remote audio was blocked earlier, a tap will retry. If not blocked,
             // this is a no-op.
             tryPlayAllRemoteAudio();
         } catch (e) {
+            hideLoading();
             setStatus('Error: ' + (e && e.message ? e.message : String(e)));
         }
     }
@@ -460,4 +783,5 @@
     });
 })();
 </script>
+{% endcomment %}
 {% endblock %}

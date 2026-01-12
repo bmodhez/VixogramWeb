@@ -1,14 +1,18 @@
 {% extends "base.html" %}
 {% load i18n %}
 {% load account %}
+{% load static %}
 
 {% block content %}
-<div class="min-h-[calc(100vh-7rem)] flex items-center justify-center py-10">
-  <div class="w-full max-w-md bg-gray-900/60 border border-gray-800 rounded-2xl shadow-2xl p-6">
+<div class="min-h-[calc(100vh-7rem)] relative flex items-center justify-center px-4 py-10 overflow-hidden">
+  <div aria-hidden="true" class="pointer-events-none absolute -top-24 -left-24 h-80 w-80 rounded-full bg-[#8E2DE2]/25 blur-3xl"></div>
+  <div aria-hidden="true" class="pointer-events-none absolute -bottom-28 -right-28 h-96 w-96 rounded-full bg-[#4A00E0]/20 blur-3xl"></div>
+
+  <div class="w-full max-w-md bg-white/5 backdrop-blur-md border border-white/10 rounded-2xl shadow-2xl shadow-black/30 p-6 motion-safe:animate-[fadeInUp_500ms_ease-out]">
     <div class="flex items-start justify-between gap-4">
       <div>
-        <h1 class="text-2xl font-bold text-emerald-400">{% trans "Create account" %}</h1>
-        <p class="text-sm text-gray-300 mt-1">{% trans "Join Vixogram and start chatting." %}</p>
+        <h1 class="text-2xl font-bold text-white">{% trans "Sign up" %}</h1>
+        <p class="text-sm text-gray-300 mt-1">{% trans "Create your account and start chatting." %}</p>
       </div>
       <div class="text-xs font-semibold text-gray-200 bg-gray-800 border border-gray-700 rounded-full px-3 py-1">
         {% trans "New Year" %}
@@ -24,28 +28,174 @@
         </div>
       {% endif %}
 
-      {% for field in form %}
+      {% if form.email %}
         <div class="space-y-1">
-          <label class="text-sm text-gray-200" for="{{ field.id_for_label }}">{{ field.label }}</label>
-          {{ field }}
-          {% if field.errors %}
-            <div class="text-xs text-red-400">{{ field.errors|first }}</div>
+          <label class="sr-only" for="{{ form.email.id_for_label }}">{% trans "Email" %}</label>
+          <div class="relative vixo-field-with-icon">
+            <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-300">
+              <i data-lucide="mail" class="w-5 h-5"></i>
+            </span>
+            {{ form.email }}
+          </div>
+          {% if form.email.errors %}
+            <div class="text-xs text-red-400">{{ form.email.errors|first }}</div>
           {% endif %}
         </div>
-      {% endfor %}
+      {% endif %}
+
+      {% if form.username %}
+        <div class="space-y-1">
+          <label class="sr-only" for="{{ form.username.id_for_label }}">{% trans "Username" %}</label>
+          <div class="relative vixo-field-with-icon">
+            <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-300">
+              <i data-lucide="circle-user-round" class="w-5 h-5"></i>
+            </span>
+            {{ form.username }}
+          </div>
+          {% if form.username.errors %}
+            <div class="text-xs text-red-400">{{ form.username.errors|first }}</div>
+          {% endif %}
+        </div>
+      {% endif %}
+
+      {% if form.password1 %}
+        <div class="space-y-1">
+          <label class="sr-only" for="{{ form.password1.id_for_label }}">{% trans "Password" %}</label>
+          <div class="relative vixo-field-with-icon">
+            <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-300">
+              <i data-lucide="lock-keyhole" class="w-5 h-5"></i>
+            </span>
+            {{ form.password1 }}
+          </div>
+          {% if form.password1.errors %}
+            <div class="text-xs text-red-400">{{ form.password1.errors|first }}</div>
+          {% endif %}
+        </div>
+      {% endif %}
+
+      {% if form.password2 %}
+        <div class="space-y-1">
+          <label class="sr-only" for="{{ form.password2.id_for_label }}">{% trans "Confirm password" %}</label>
+          <div class="relative vixo-field-with-icon">
+            <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-300">
+              <i data-lucide="lock-keyhole" class="w-5 h-5"></i>
+            </span>
+            {{ form.password2 }}
+          </div>
+          {% if form.password2.errors %}
+            <div class="text-xs text-red-400">{{ form.password2.errors|first }}</div>
+          {% endif %}
+        </div>
+      {% endif %}
 
       {% if redirect_field_value %}
         <input type="hidden" name="{{ redirect_field_name }}" value="{{ redirect_field_value }}" />
       {% endif %}
 
-      <button type="submit" class="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-semibold rounded-xl py-3 transition-colors">
+      {% comment %}
+      reCAPTCHA (temporarily disabled in UI)
+      - Re-enable later by uncommenting this block AND setting RECAPTCHA_ENABLED=1 in .env
+
+      {% if RECAPTCHA_ENABLED %}
+        {% if RECAPTCHA_VERSION == 'v3' %}
+          <input type="hidden" name="g-recaptcha-response" id="id_g_recaptcha_response" value="" />
+          <div class="text-xs text-gray-400 text-center">
+            Protected by reCAPTCHA.
+          </div>
+        {% else %}
+          <div class="pt-1 flex justify-center">
+            <div class="g-recaptcha" data-sitekey="{{ RECAPTCHA_SITE_KEY }}" data-theme="dark"></div>
+          </div>
+        {% endif %}
+
+        {% if RECAPTCHA_DEBUG and not RECAPTCHA_SITE_KEY_LOOKS_VALID %}
+          <div class="text-xs text-amber-300 bg-gray-900/40 border border-gray-800 rounded-xl px-4 py-3">
+            reCAPTCHA site key looks misconfigured. It usually starts with <span class="font-semibold">6L…</span>.
+          </div>
+        {% endif %}
+
+        {% if RECAPTCHA_DEBUG %}
+          <div class="text-[11px] text-gray-400 bg-gray-900/30 border border-gray-800 rounded-xl px-4 py-3">
+            If you see <span class="text-red-300">&quot;Invalid site key&quot;</span>, double-check you created a
+            <span class="font-semibold">reCAPTCHA v2 Checkbox</span> key (not v3/Enterprise) and that
+            <span class="font-semibold">RECAPTCHA_SITE_KEY</span> is the &quot;Site key&quot; (public) — not the secret.
+          </div>
+        {% endif %}
+      {% endif %}
+      {% endcomment %}
+
+      <button type="submit" class="w-full bg-gradient-to-r from-[#8E2DE2] to-[#4A00E0] text-white font-semibold rounded-xl py-3 transition motion-safe:transition-transform motion-safe:duration-200 hover:scale-[1.02] hover:shadow-[0_0_30px_rgba(142,45,226,0.35)] active:scale-[0.99]">
         {% trans "Create account" %}
       </button>
 
       <p class="text-sm text-gray-300 text-center">
-        {% blocktrans %}Already have an account? <a class="text-emerald-400 hover:text-emerald-300 font-semibold" href="{{ login_url }}">Sign in</a>{% endblocktrans %}
+        {% blocktrans %}Already have an account? <a class="text-indigo-200 hover:text-indigo-100 font-semibold" href="{{ login_url }}">Sign in</a>{% endblocktrans %}
       </p>
     </form>
   </div>
 </div>
 {% endblock content %}
+
+{% block extra_body %}
+  {{ block.super }}
+  {% comment %}
+  reCAPTCHA (temporarily disabled in UI)
+  - Re-enable later by uncommenting this block AND setting RECAPTCHA_ENABLED=1 in .env
+
+  {% if RECAPTCHA_ENABLED %}
+    <script src="{{ RECAPTCHA_SCRIPT_URL }}" async defer></script>
+    {% if RECAPTCHA_VERSION == 'v3' %}
+      <script>
+        (function () {
+          function setToken(token) {
+            var el = document.getElementById('id_g_recaptcha_response');
+            if (el) el.value = token || '';
+          }
+
+          function executeV3(cb) {
+            if (!window.grecaptcha || !grecaptcha.ready) {
+              if (cb) cb(false);
+              return;
+            }
+
+            grecaptcha.ready(function () {
+              try {
+                grecaptcha.execute('{{ RECAPTCHA_SITE_KEY }}', { action: '{{ RECAPTCHA_ACTION }}' })
+                  .then(function (token) {
+                    setToken(token);
+                    if (cb) cb(true);
+                  })
+                  .catch(function () {
+                    if (cb) cb(false);
+                  });
+              } catch (e) {
+                if (cb) cb(false);
+              }
+            });
+          }
+
+          // Pre-fetch a token soon after load.
+          window.addEventListener('load', function () {
+            executeV3();
+          });
+
+          // Ensure a fresh token right before submit.
+          document.addEventListener('submit', function (ev) {
+            var form = ev.target;
+            if (!form || form.tagName !== 'FORM') return;
+            if (form.getAttribute('data-recaptcha-v3-armed') === '1') return;
+            ev.preventDefault();
+            form.setAttribute('data-recaptcha-v3-armed', '1');
+            executeV3(function (ok) {
+              form.removeAttribute('data-recaptcha-v3-armed');
+              if (ok) form.submit();
+            });
+          }, true);
+        })();
+      </script>
+    {% endif %}
+  {% endif %}
+  {% endcomment %}
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <script src="{% static 'js/account.js' %}" defer></script>
+{% endblock %}

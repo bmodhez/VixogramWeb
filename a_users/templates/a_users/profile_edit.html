@@ -6,7 +6,7 @@
         <h1 class="text-2xl font-bold mb-2 text-center text-emerald-400">Edit profile</h1>
         <p class="text-center text-sm text-gray-400 mb-6">Update your avatar and profile details.</p>
 
-        <form method="POST" action="{% url 'profile-edit' %}" enctype="multipart/form-data" class="space-y-4">
+        <form method="POST" action="{% url 'profile-edit' %}" enctype="multipart/form-data" class="space-y-4" data-loading-text="Saving changes…">
             {% csrf_token %}
 
             {% for field in form %}
@@ -14,7 +14,7 @@
                     <div class="flex flex-col gap-2">
                         <label class="text-sm font-semibold text-gray-300">Current avatar</label>
                         <div class="flex items-center gap-3">
-                            <img src="{{ profile.avatar }}" alt="Current avatar" class="w-16 h-16 rounded-full object-cover border border-gray-700" />
+                            <img id="current_avatar_preview" src="{{ profile.avatar }}" alt="Current avatar" class="w-16 h-16 rounded-full object-cover border border-gray-700" />
                             <div class="text-xs text-gray-400">Choose a new image to update your avatar.</div>
                         </div>
 
@@ -45,5 +45,285 @@
             </div>
         </form>
     </div>
+
+        <!-- Avatar crop modal (opens after selecting an image) -->
+        <div id="avatar_crop_modal" class="hidden fixed inset-0 z-50" aria-hidden="true">
+                <div class="absolute inset-0 bg-black/70"></div>
+                <div class="relative min-h-screen flex items-center justify-center px-4 py-8">
+                        <div class="w-full max-w-md bg-gray-800 rounded-2xl shadow-2xl border border-gray-700 overflow-hidden">
+                                <div class="flex items-center justify-between px-5 py-4 border-b border-gray-700">
+                                        <div class="text-white font-bold">Crop image</div>
+                                        <button id="avatar_crop_close" type="button" class="text-gray-300 hover:text-white px-2 py-1">✕</button>
+                                </div>
+
+                                <div class="p-5">
+                                        <div class="text-xs text-gray-400 mb-3">Drag to position • Use zoom</div>
+
+                                        <div class="mx-auto w-[min(20rem,85vw)] max-w-full">
+                                            <div id="avatar_crop_area" class="relative w-[min(20rem,85vw)] h-[min(20rem,85vw)] max-w-full bg-gray-900/40 border border-gray-700 rounded-2xl overflow-hidden touch-none select-none">
+                                                        <img id="avatar_crop_img" alt="Crop preview" class="absolute left-1/2 top-1/2 will-change-transform pointer-events-none" />
+                                                        <div aria-hidden="true" class="absolute inset-0 ring-1 ring-white/10"></div>
+                                                </div>
+                                        </div>
+
+                                        <div class="mt-4">
+                                                <label class="text-xs text-gray-400">Zoom</label>
+                                                <input id="avatar_crop_zoom" type="range" min="1" max="3" step="0.01" value="1" class="w-full" />
+                                        </div>
+
+                                        <div class="mt-5 flex items-center gap-3">
+                                                <button id="avatar_crop_cancel" type="button" class="flex-1 text-center bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg transition-colors">Cancel</button>
+                                                <button id="avatar_crop_apply" type="button" class="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-2 px-4 rounded-lg transition-colors">Apply</button>
+                                        </div>
+                                </div>
+                        </div>
+                </div>
+        </div>
 </wrapper>
+{% endblock %}
+
+{% block extra_body %}
+{{ block.super }}
+<script>
+(() => {
+    const fileInput = document.getElementById('id_image') || document.querySelector('input[type="file"][name="image"]');
+    if (!fileInput) return;
+
+    const modal = document.getElementById('avatar_crop_modal');
+    const closeBtn = document.getElementById('avatar_crop_close');
+    const cancelBtn = document.getElementById('avatar_crop_cancel');
+    const applyBtn = document.getElementById('avatar_crop_apply');
+    const cropArea = document.getElementById('avatar_crop_area');
+    const cropImg = document.getElementById('avatar_crop_img');
+    const zoomInput = document.getElementById('avatar_crop_zoom');
+    const avatarPreview = document.getElementById('current_avatar_preview');
+
+    if (!modal || !closeBtn || !cancelBtn || !applyBtn || !cropArea || !cropImg || !zoomInput) return;
+
+    const OUT_SIZE = 512;
+
+    const getCropSize = () => {
+        const rect = cropArea.getBoundingClientRect();
+        const size = Math.max(1, Math.round(Math.min(rect.width || 0, rect.height || 0)));
+        return size;
+    };
+
+    let objectUrl = null;
+    let imgEl = null;
+    let imgW = 0;
+    let imgH = 0;
+    let baseScale = 1;
+    let zoom = 1;
+    let offsetX = 0;
+    let offsetY = 0;
+    let dragging = false;
+    let startX = 0;
+    let startY = 0;
+    let startOffsetX = 0;
+    let startOffsetY = 0;
+    let originalFile = null;
+
+    const open = () => {
+        modal.classList.remove('hidden');
+        modal.setAttribute('aria-hidden', 'false');
+    };
+
+    const close = () => {
+        modal.classList.add('hidden');
+        modal.setAttribute('aria-hidden', 'true');
+    };
+
+    const cleanupObjectUrl = () => {
+        if (objectUrl) {
+            try { URL.revokeObjectURL(objectUrl); } catch {}
+            objectUrl = null;
+        }
+    };
+
+    const clampOffsets = () => {
+        const CROP_SIZE = getCropSize();
+        const scale = baseScale * zoom;
+        const scaledW = imgW * scale;
+        const scaledH = imgH * scale;
+        const halfCrop = CROP_SIZE / 2;
+        const maxX = Math.max(0, (scaledW / 2) - halfCrop);
+        const maxY = Math.max(0, (scaledH / 2) - halfCrop);
+        offsetX = Math.min(maxX, Math.max(-maxX, offsetX));
+        offsetY = Math.min(maxY, Math.max(-maxY, offsetY));
+    };
+
+    const renderTransform = () => {
+        clampOffsets();
+        const scale = baseScale * zoom;
+        cropImg.style.transform = `translate(-50%, -50%) translate(${offsetX}px, ${offsetY}px) scale(${scale})`;
+    };
+
+    const syncCropSize = () => {
+        if (!imgEl) return;
+        const CROP_SIZE = getCropSize();
+        baseScale = Math.max(CROP_SIZE / imgW, CROP_SIZE / imgH);
+        renderTransform();
+    };
+
+    const loadImageFromFile = (file) => {
+        cleanupObjectUrl();
+        originalFile = file;
+        objectUrl = URL.createObjectURL(file);
+
+        return new Promise((resolve, reject) => {
+            const im = new Image();
+            im.onload = () => resolve(im);
+            im.onerror = reject;
+            im.src = objectUrl;
+        });
+    };
+
+    const resetStateForImage = (im) => {
+        imgEl = im;
+        imgW = im.naturalWidth || im.width || 1;
+        imgH = im.naturalHeight || im.height || 1;
+
+        baseScale = Math.max(getCropSize() / imgW, getCropSize() / imgH);
+        zoom = 1;
+        zoomInput.value = '1';
+        offsetX = 0;
+        offsetY = 0;
+
+        cropImg.src = im.src;
+        cropImg.style.width = imgW + 'px';
+        cropImg.style.height = imgH + 'px';
+        renderTransform();
+    };
+
+    const clearSelection = () => {
+        fileInput.value = '';
+        originalFile = null;
+        cleanupObjectUrl();
+    };
+
+    fileInput.addEventListener('change', async () => {
+        const file = fileInput.files && fileInput.files[0];
+        if (!file) return;
+        if (!file.type || !file.type.startsWith('image/')) {
+            clearSelection();
+            return;
+        }
+
+        try {
+            const im = await loadImageFromFile(file);
+            resetStateForImage(im);
+            open();
+            requestAnimationFrame(syncCropSize);
+        } catch {
+            clearSelection();
+        }
+    });
+
+    window.addEventListener('resize', () => {
+        if (modal.classList.contains('hidden')) return;
+        syncCropSize();
+    });
+
+    zoomInput.addEventListener('input', () => {
+        zoom = Math.max(1, Math.min(3, parseFloat(zoomInput.value || '1') || 1));
+        renderTransform();
+    });
+
+    const onPointerDown = (e) => {
+        if (!imgEl) return;
+        dragging = true;
+        cropArea.setPointerCapture?.(e.pointerId);
+        startX = e.clientX;
+        startY = e.clientY;
+        startOffsetX = offsetX;
+        startOffsetY = offsetY;
+    };
+
+    const onPointerMove = (e) => {
+        if (!dragging) return;
+        const dx = e.clientX - startX;
+        const dy = e.clientY - startY;
+        offsetX = startOffsetX + dx;
+        offsetY = startOffsetY + dy;
+        renderTransform();
+    };
+
+    const onPointerUp = () => {
+        dragging = false;
+    };
+
+    cropArea.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+
+    const applyCrop = async () => {
+        if (!imgEl || !originalFile) return;
+
+        const CROP_SIZE = getCropSize();
+
+        // Render to canvas
+        const canvas = document.createElement('canvas');
+        canvas.width = OUT_SIZE;
+        canvas.height = OUT_SIZE;
+
+        const ctx = canvas.getContext('2d', { alpha: true });
+        if (!ctx) return;
+
+        const scale = baseScale * zoom;
+        const ratio = OUT_SIZE / CROP_SIZE;
+
+        ctx.clearRect(0, 0, OUT_SIZE, OUT_SIZE);
+        ctx.save();
+        ctx.translate(OUT_SIZE / 2 + offsetX * ratio, OUT_SIZE / 2 + offsetY * ratio);
+        ctx.scale(scale * ratio, scale * ratio);
+        ctx.drawImage(imgEl, -imgW / 2, -imgH / 2);
+        ctx.restore();
+
+        const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png', 0.92));
+        if (!blob) return;
+
+        const baseName = (originalFile.name || 'avatar').replace(/\.[^/.]+$/, '');
+        const croppedFile = new File([blob], `${baseName}-cropped.png`, { type: 'image/png' });
+
+        const dt = new DataTransfer();
+        dt.items.add(croppedFile);
+        fileInput.files = dt.files;
+
+        if (avatarPreview) {
+            try {
+                const previewUrl = URL.createObjectURL(croppedFile);
+                avatarPreview.src = previewUrl;
+                // Let the browser keep this url until next change; no need to revoke immediately.
+            } catch {}
+        }
+
+        close();
+    };
+
+    const cancelCrop = () => {
+        close();
+        clearSelection();
+    };
+
+    closeBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        cancelCrop();
+    });
+    cancelBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        cancelCrop();
+    });
+    applyBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        await applyCrop();
+    });
+
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal || e.target === modal.firstElementChild) cancelCrop();
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && !modal.classList.contains('hidden')) cancelCrop();
+    });
+})();
+</script>
 {% endblock %}

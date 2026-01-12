@@ -6,20 +6,21 @@ For UX: click '+' opens the emoji bar.
 <div class="relative">
     <button
         type="button"
-        class="h-7 w-7 inline-flex items-center justify-center rounded-full border border-gray-800 bg-gray-900/60 text-gray-300 hover:bg-gray-800/60 hover:text-white transition-colors"
+        class="h-8 w-8 inline-flex items-center justify-center rounded-full bg-gray-800/40 text-gray-300 hover:text-white transition duration-150 ease-out hover:bg-gray-800/70 hover:scale-105 active:scale-95
+               opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:pointer-events-none sm:group-hover:pointer-events-auto"
         aria-label="Add reaction"
         data-reaction-toggle
         data-message-id="{{ message.id }}">
         <span class="text-base leading-none">+</span>
     </button>
 
-    <div class="hidden absolute bottom-full mb-2 right-0 items-center gap-1 rounded-full border border-gray-800 bg-gray-900/95 px-2 py-1 shadow-lg shadow-black/20"
+    <div class="hidden absolute bottom-full mb-2 right-0 items-center gap-1 rounded-full bg-gray-900/95 px-2 py-1 shadow-lg shadow-black/20 ring-1 ring-white/10"
          data-reaction-picker
          data-message-id="{{ message.id }}">
         {% for emoji in reaction_emojis %}
             <button
                 type="button"
-                class="h-8 w-8 inline-flex items-center justify-center rounded-full hover:bg-gray-800/60 transition-colors"
+                class="h-9 w-9 inline-flex items-center justify-center rounded-full text-gray-100 transition duration-150 ease-out hover:bg-gray-800/60 hover:scale-105 active:scale-95"
                 data-react-emoji
                 data-message-id="{{ message.id }}"
                 data-emoji="{{ emoji }}">

@@ -1,11 +1,27 @@
+{% load chat_extras %}
+
 {% if message.body %}
-    <span class="break-words whitespace-pre-wrap">{{ message.body }}</span>
+    <span class="chat-message-body break-words whitespace-pre-wrap">{{ message.body|escape|highlight_mentions|urlize|linebreaksbr }}</span>
 {% elif message.file %}
     {% if message.is_image %}
-        <img class="w-full sm:w-auto max-w-full sm:max-w-72 h-auto rounded-lg" src="{{ message.file.url }}" />
+        <img
+            class="w-full sm:w-auto max-w-full sm:max-w-72 h-auto rounded-lg cursor-zoom-in"
+            src="{{ message.file.url }}"
+            alt="{{ message.filename|default:'Image' }}"
+            loading="lazy"
+            data-image-viewer
+        />
     {% elif message.is_video %}
         <div class="max-w-full sm:max-w-72">
-            <video class="w-full h-auto rounded-lg bg-black/20" controls playsinline preload="metadata">
+            <video
+                class="w-full h-auto rounded-lg bg-black/20 cursor-zoom-in"
+                controls
+                playsinline
+                preload="metadata"
+                data-video-viewer
+                data-video-src="{{ message.file.url }}"
+                {% if message.video_mime_type %}data-video-type="{{ message.video_mime_type }}"{% endif %}
+            >
                 <source src="{{ message.file.url }}" {% if message.video_mime_type %}type="{{ message.video_mime_type }}"{% endif %} />
                 Your browser can't play this video.
             </video>
@@ -18,6 +34,6 @@
     {% endif %}
 
     {% if message.file_caption %}
-        <div class="mt-2 text-xs leading-snug {% if message.author == user %}text-white/80{% else %}text-gray-600{% endif %}">{{ message.file_caption }}</div>
+        <div class="mt-2 text-xs leading-snug {% if message.author == user %}text-white/80{% else %}text-gray-600{% endif %}">{{ message.file_caption|escape|highlight_mentions|urlize|linebreaksbr }}</div>
     {% endif %}
 {% endif %}

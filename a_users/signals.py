@@ -1,6 +1,8 @@
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 from django.contrib.auth.models import User
+from django.conf import settings
+import os
 from .models import Profile
 
 try:
@@ -32,7 +34,10 @@ if user_signed_up is not None:
     def queue_welcome_email(request, user, **kwargs):
         # Send in background (Celery). In dev, may run eagerly depending on settings.
         try:
-            send_welcome_email.delay(user.id)
+            env_broker = (os.environ.get('CELERY_BROKER_URL') or '').strip()
+            settings_broker = (getattr(settings, 'CELERY_BROKER_URL', None) or '').strip()
+            if env_broker or settings_broker:
+                send_welcome_email.delay(user.id)
         except Exception:
             # Avoid blocking signup if broker is down.
             pass

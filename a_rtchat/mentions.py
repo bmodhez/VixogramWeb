@@ -2,6 +2,7 @@ import re
 from typing import Iterable
 
 from django.contrib.auth import get_user_model
+from django.db.models import Q
 
 
 # Conservative @mention pattern: @username (letters, numbers, underscore, dot, dash)
@@ -28,18 +29,46 @@ def extract_mention_usernames(text: str) -> list[str]:
 def resolve_mentioned_users(usernames: Iterable[str]):
     """Resolve usernames to active users, case-insensitively."""
     User = get_user_model()
-    users = []
-    seen_ids = set()
+    wanted: list[str] = []
+    seen_names: set[str] = set()
     for u in usernames:
         if not u:
             continue
-        user = User.objects.filter(is_active=True, username__iexact=u).first()
-        if not user:
+        key = str(u).strip().lower()
+        if not key:
             continue
-        if user.id in seen_ids:
+        if key in seen_names:
             continue
-        seen_ids.add(user.id)
-        users.append(user)
-        if len(users) >= 10:
+        seen_names.add(key)
+        wanted.append(key)
+        if len(wanted) >= 10:
             break
-    return users
+
+    if not wanted:
+        return []
+
+    q = Q()
+    for key in wanted:
+        q |= Q(username__iexact=key)
+
+    candidates = list(User.objects.filter(is_active=True).filter(q))
+    by_lower = {}
+    for u in candidates:
+        try:
+            by_lower[str(u.username).lower()] = u
+        except Exception:
+            continue
+
+    out = []
+    seen_ids: set[int] = set()
+    for key in wanted:
+        u = by_lower.get(key)
+        if not u:
+            continue
+        if getattr(u, 'id', None) in seen_ids:
+            continue
+        seen_ids.add(int(u.id))
+        out.append(u)
+        if len(out) >= 10:
+            break
+    return out

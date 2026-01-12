@@ -1,0 +1,108 @@
+{% comment %}
+Context:
+- profile_user
+- kind: 'followers' | 'following'
+- is_owner
+- locked_reason
+- items: list[Follow]
+- total_count
+- is_full
+
+This template is loaded into the profile follow-list modal body via HTMX.
+{% endcomment %}
+
+<div id="follow_modal_state" class="hidden" data-kind="{{ kind }}" data-full="{% if is_full %}1{% else %}0{% endif %}"></div>
+
+{% if locked_reason %}
+  <div class="text-sm text-gray-300">
+    <div class="text-gray-200 font-semibold">Followers & Following</div>
+    <div class="text-xs text-gray-400 mt-1">{{ locked_reason }}</div>
+    {% if user.is_authenticated %}
+      <div class="mt-3">
+        <a href="{% url 'account_email' %}" class="bg-gray-700 hover:bg-gray-600 text-white rounded-lg px-4 py-2 transition-colors inline-block text-xs">Verify email</a>
+      </div>
+    {% endif %}
+  </div>
+{% else %}
+  {% if items %}
+    <div class="space-y-2">
+      {% for rel in items %}
+        {% if kind == 'followers' %}
+          {% with u=rel.follower %}
+            <div class="flex items-center gap-3 bg-gray-900/40 rounded-xl border border-gray-700 px-3 py-2">
+              <a href="{% url 'profile-user' u.username %}" class="flex items-center gap-3 min-w-0 flex-1 hover:bg-gray-800/40 rounded-lg px-2 py-2 transition-colors">
+                <img src="{{ u.profile.avatar }}" class="w-9 h-9 rounded-full object-cover border border-gray-700" alt="{{ u.username }}" />
+                <div class="min-w-0">
+                  <div class="text-sm text-gray-100 font-semibold truncate">{{ u.profile.name }}</div>
+                  <div class="text-xs text-gray-400 truncate">@{{ u.username }}</div>
+                </div>
+              </a>
+            </div>
+          {% endwith %}
+        {% else %}
+          {% with u=rel.following %}
+            <div class="flex items-center gap-3 bg-gray-900/40 rounded-xl border border-gray-700 px-3 py-2">
+              <a href="{% url 'profile-user' u.username %}" class="flex items-center gap-3 min-w-0 flex-1 hover:bg-gray-800/40 rounded-lg px-2 py-2 transition-colors">
+                <img src="{{ u.profile.avatar }}" class="w-9 h-9 rounded-full object-cover border border-gray-700" alt="{{ u.username }}" />
+                <div class="min-w-0">
+                  <div class="text-sm text-gray-100 font-semibold truncate">{{ u.profile.name }}</div>
+                  <div class="text-xs text-gray-400 truncate">@{{ u.username }}</div>
+                </div>
+              </a>
+
+              {% if is_owner %}
+                <form
+                  method="post"
+                  action="{% url 'follow-toggle' u.username %}"
+                  hx-post="{% url 'follow-toggle' u.username %}"
+                  hx-swap="none"
+                  hx-confirm="Are you sure you want to unfollow @{{ u.username }}?"
+                  data-confirm-title="Unfollow"
+                >
+                  {% csrf_token %}
+                  <button type="submit" class="text-xs bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded-lg transition-colors">
+                    Unfollow
+                  </button>
+                </form>
+              {% endif %}
+            </div>
+          {% endwith %}
+        {% endif %}
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="text-sm text-gray-400">
+      {% if kind == 'followers' %}
+        No followers yet.
+      {% else %}
+        Not following anyone yet.
+      {% endif %}
+    </div>
+  {% endif %}
+
+  {% if total_count|default:0 > 5 and not is_full %}
+    <div class="mt-4">
+      {% if kind == 'followers' %}
+        <button
+          type="button"
+          class="w-full bg-gray-700 hover:bg-gray-600 text-white font-semibold py-2 px-4 rounded-lg transition-colors text-sm"
+          hx-get="{% url 'profile-followers' profile_user.username %}?full=1"
+          hx-target="#follow_modal_body"
+          hx-swap="innerHTML"
+        >
+          See full
+        </button>
+      {% else %}
+        <button
+          type="button"
+          class="w-full bg-gray-700 hover:bg-gray-600 text-white font-semibold py-2 px-4 rounded-lg transition-colors text-sm"
+          hx-get="{% url 'profile-following' profile_user.username %}?full=1"
+          hx-target="#follow_modal_body"
+          hx-swap="innerHTML"
+        >
+          See full
+        </button>
+      {% endif %}
+    </div>
+  {% endif %}
+{% endif %}

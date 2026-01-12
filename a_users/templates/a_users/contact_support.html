@@ -1,0 +1,48 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="w-full max-w-2xl mx-auto">
+    <div class="rounded-2xl border border-gray-800 bg-gray-900/50 backdrop-blur p-5 sm:p-6">
+        <div class="flex items-start justify-between gap-4">
+            <div>
+                <h1 class="text-xl sm:text-2xl font-bold text-white">Contact Support</h1>
+                <p class="mt-1 text-sm text-gray-400">Send a message to admin/support for help or feedback.</p>
+                {% if CONTACT_INSTAGRAM_URL %}
+                    <p class="mt-2 text-sm text-gray-400">
+                        Or reach me on
+                        <a class="text-emerald-300 hover:text-emerald-200 font-semibold" href="{{ CONTACT_INSTAGRAM_URL }}" target="_blank" rel="noopener noreferrer">Instagram</a>.
+                    </p>
+                {% endif %}
+            </div>
+            <a href="{% url 'home' %}" class="text-sm text-gray-300 hover:text-white px-3 py-2 rounded-lg hover:bg-gray-800 transition-colors">Back</a>
+        </div>
+
+        <form method="post" class="mt-5 space-y-4">
+            {% csrf_token %}
+            <input type="hidden" name="page" value="{{ request.path }}" />
+
+            <div>
+                <label class="block text-sm font-semibold text-gray-200 mb-2" for="id_subject">Subject</label>
+                {{ form.subject }}
+                {% if form.subject.errors %}
+                    <div class="mt-1 text-xs text-red-400">{{ form.subject.errors|striptags }}</div>
+                {% endif %}
+            </div>
+
+            <div>
+                <label class="block text-sm font-semibold text-gray-200 mb-2" for="id_message">Message</label>
+                {{ form.message }}
+                {% if form.message.errors %}
+                    <div class="mt-1 text-xs text-red-400">{{ form.message.errors|striptags }}</div>
+                {% endif %}
+            </div>
+
+            <div class="flex items-center justify-end gap-3">
+                <button type="submit" class="bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl px-5 py-2.5 transition-colors">
+                    Send
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

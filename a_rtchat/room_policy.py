@@ -1,0 +1,41 @@
+from __future__ import annotations
+
+
+SHOWCASE_GROUP_NAME = 'Showcase Your Work'
+FREE_PROMOTION_GROUP_NAME = 'Free Promotion'
+
+
+def _display_name(room) -> str:
+    return (getattr(room, 'groupchat_name', None) or getattr(room, 'group_name', '') or '').strip()
+
+
+def is_showcase_room(room) -> bool:
+    """Return True if this room is the 'Showcase Your Work' group chat.
+
+    Matches by substring to tolerate emoji/prefix variations.
+    """
+    name = _display_name(room).lower()
+    return 'showcase your work' in name
+
+
+def is_free_promotion_room(room) -> bool:
+    """Return True if this room is the 'Free Promotion' group chat.
+
+    Matches by substring to tolerate emoji/prefix variations.
+    """
+    name = _display_name(room).lower()
+    return 'free promotion' in name
+
+
+def room_allows_links(room) -> bool:
+    # Default policy: links only in private chats + Showcase + Free Promotion.
+    return bool(getattr(room, 'is_private', False)) or is_showcase_room(room) or is_free_promotion_room(room)
+
+
+def room_allows_uploads(room) -> bool:
+    # Default policy: uploads only in private code rooms + Showcase Your Work.
+    # Exception: Free Promotion does NOT allow uploads.
+    if is_free_promotion_room(room):
+        return False
+    private_code = bool(getattr(room, 'is_private', False)) and bool(getattr(room, 'is_code_room', False))
+    return private_code or is_showcase_room(room)

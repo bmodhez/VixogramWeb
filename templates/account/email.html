@@ -1,8 +1,9 @@
 {% extends 'base.html' %}
 {% load i18n %}
+{% load static %}
 
 {% block content %}
-<wrapper class="block max-w-3xl mx-auto my-10 px-6">
+<wrapper id="account-email-page" class="block max-w-3xl mx-auto my-10 px-6">
     <div class="bg-gray-800 rounded-2xl shadow-2xl border border-gray-700 p-6">
         <div class="flex items-center justify-between gap-4 mb-6">
             <div>
@@ -104,32 +105,7 @@
             </div>
         {% endif %}
 
-        <style>
-            /* base.html doesn't define extra_body, so keep styles inline here */
-            #id_email {
-                width: 100%;
-                background-color: #374151; /* gray-700 */
-                color: #ffffff;
-                border: 1px solid #4b5563; /* gray-600 */
-                border-radius: 0.5rem;
-                padding: 0.75rem 1rem;
-                outline: none;
-            }
-            #id_email::placeholder {
-                color: #9ca3af; /* gray-400 */
-            }
-            #id_email:focus {
-                border-color: #10b981; /* emerald-500 */
-            }
-        </style>
-        <script>
-            (function () {
-                const el = document.getElementById('id_email');
-                if (el && !el.getAttribute('placeholder')) {
-                    el.setAttribute('placeholder', 'you@example.com');
-                }
-            })();
-        </script>
+        <script src="{% static 'js/account.js' %}" defer></script>
     </div>
 </wrapper>
 {% endblock %}

@@ -43,7 +43,7 @@ messaging.onBackgroundMessage((payload) => {{
     const title = notif.title || data.title || 'Vixo Connect';
     const options = {{
       body: notif.body || data.body || '',
-      icon: notif.icon || '/static/favicon.ico',
+      icon: notif.icon || '/static/favicon.png',
       data: {{
         url: data.url || '/',
       }},

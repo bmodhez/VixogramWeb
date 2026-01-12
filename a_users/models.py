@@ -1,5 +1,7 @@
 from django.db import models
 from django.contrib.auth.models import User
+from django.db.models import Q
+from django.conf import settings
 
 import base64
 
@@ -9,6 +11,10 @@ class Profile(models.Model):
     displayname = models.CharField(max_length=20, null=True, blank=True)
     info = models.TextField(null=True, blank=True) 
     chat_blocked = models.BooleanField(default=False)
+    is_private_account = models.BooleanField(default=False)
+    is_stealth = models.BooleanField(default=False)
+    is_bot = models.BooleanField(default=False)
+    is_dnd = models.BooleanField(default=False)
     
     def __str__(self):
         return str(self.user)
@@ -22,6 +28,16 @@ class Profile(models.Model):
     # Iska gap (indent) ab sahi hai, ye 'name' ke barabar hona chahiye
     @property
     def avatar(self):
+        # Special-case: Natasha bot DP from static.
+        try:
+            if getattr(getattr(self, 'user', None), 'username', '') in {'natasha', 'natasha-bot'}:
+                static_url = (getattr(settings, 'STATIC_URL', '/static/') or '/static/').strip()
+                if not static_url.endswith('/'):
+                    static_url += '/'
+                return f"{static_url}natasha.jpeg"
+        except Exception:
+            pass
+
         if self.image:
             try:
                 return self.image.url
@@ -70,3 +86,90 @@ class Follow(models.Model):
 
     def __str__(self):
         return f"{self.follower_id} -> {self.following_id}"
+
+
+class UserReport(models.Model):
+    STATUS_OPEN = 'open'
+    STATUS_RESOLVED = 'resolved'
+    STATUS_DISMISSED = 'dismissed'
+    STATUS_CHOICES = [
+        (STATUS_OPEN, 'Open'),
+        (STATUS_RESOLVED, 'Resolved'),
+        (STATUS_DISMISSED, 'Dismissed'),
+    ]
+
+    REASON_SPAM = 'spam'
+    REASON_ABUSE = 'abuse'
+    REASON_IMPERSONATION = 'impersonation'
+    REASON_NUDITY = 'nudity'
+    REASON_OTHER = 'other'
+    REASON_CHOICES = [
+        (REASON_SPAM, 'Spam'),
+        (REASON_ABUSE, 'Harassment / abuse'),
+        (REASON_IMPERSONATION, 'Impersonation'),
+        (REASON_NUDITY, 'Inappropriate content'),
+        (REASON_OTHER, 'Other'),
+    ]
+
+    reporter = models.ForeignKey(User, on_delete=models.CASCADE, related_name='reports_made')
+    reported_user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='reports_received')
+    reason = models.CharField(max_length=32, choices=REASON_CHOICES)
+    details = models.TextField(blank=True, default='')
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=STATUS_OPEN)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    handled_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='reports_handled',
+    )
+    handled_at = models.DateTimeField(null=True, blank=True)
+    resolution_note = models.TextField(blank=True, default='')
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['status', '-created_at'], name='ur_status_created_idx'),
+            models.Index(fields=['reported_user', '-created_at'], name='ur_reported_created_idx'),
+        ]
+        constraints = [
+            models.CheckConstraint(check=~Q(reporter=models.F('reported_user')), name='userreport_no_self'),
+            models.UniqueConstraint(
+                fields=['reporter', 'reported_user'],
+                condition=Q(status='open'),
+                name='userreport_unique_open_report',
+            ),
+        ]
+
+    def __str__(self):
+        return f"Report({self.id}) {self.reporter_id} -> {self.reported_user_id} ({self.status})"
+
+
+class SupportEnquiry(models.Model):
+    STATUS_OPEN = 'open'
+    STATUS_RESOLVED = 'resolved'
+    STATUS_CHOICES = [
+        (STATUS_OPEN, 'Open'),
+        (STATUS_RESOLVED, 'Resolved'),
+    ]
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='support_enquiries')
+    subject = models.CharField(max_length=120, blank=True, default='')
+    message = models.TextField(max_length=2000)
+    page = models.CharField(max_length=300, blank=True, default='')
+    user_agent = models.CharField(max_length=300, blank=True, default='')
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=STATUS_OPEN)
+    admin_note = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['status', '-created_at'], name='se_status_created_idx'),
+            models.Index(fields=['user', '-created_at'], name='se_user_created_idx'),
+        ]
+
+    def __str__(self):
+        return f"SupportEnquiry({self.id}) u={self.user_id} {self.status}"

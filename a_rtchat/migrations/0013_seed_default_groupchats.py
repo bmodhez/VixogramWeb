@@ -25,6 +25,9 @@ def seed_default_groupchats(apps, schema_editor):
         ('Nalayak Gang', 'Nalayak Gang 🤡'),
         ('Girls Group', 'Girls Group 💅✨'),
         ('Late Night Owls', 'Late Night Owls 🦉'),
+
+        # 📢 Promotion (no uploads, but links allowed)
+        ('Free Promotion', 'Free Promotion 📢'),
     ]
 
     for base, display in defaults:
@@ -62,6 +65,7 @@ def unseed_default_groupchats(apps, schema_editor):
         'Nalayak Gang 🤡',
         'Girls Group 💅✨',
         'Late Night Owls 🦉',
+        'Free Promotion 📢',
     ]
     ChatGroup.objects.filter(group_name__in=names).delete()
 

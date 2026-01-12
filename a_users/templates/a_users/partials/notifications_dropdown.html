@@ -1,9 +1,17 @@
+<div class="hidden" data-notif-unread="{{ unread_count|default:0 }}"></div>
+
 {% if notifications %}
     <div class="space-y-2">
         {% for n in notifications %}
-            <a href="{{ n.url|default:'#' }}" class="block rounded-xl border border-gray-800 bg-gray-900/60 hover:bg-gray-900/80 transition px-3 py-2">
+            <a
+                href="{{ n.url|default:'#' }}"
+                class="block rounded-xl border border-gray-800 bg-gray-900/60 hover:bg-gray-900/80 transition px-3 py-2"
+                data-notif-id="{{ n.id }}"
+                data-notif-read="{% if n.is_read %}1{% else %}0{% endif %}"
+                data-notif-mark-url="{% url 'notifications-mark-read' n.id %}"
+            >
                 <div class="flex items-start gap-2">
-                    <div class="mt-1 h-2 w-2 rounded-full {% if n.is_read %}bg-gray-600{% else %}bg-emerald-400{% endif %}"></div>
+                    <div data-notif-dot class="mt-1 h-2 w-2 rounded-full {% if n.is_read %}bg-gray-600{% else %}bg-emerald-400{% endif %}"></div>
                     <div class="min-w-0 flex-1">
                         <div class="text-xs text-gray-200">
                             {% if n.type == 'follow' %}Follow{% elif n.type == 'reply' %}Reply{% elif n.type == 'mention' %}Mention{% else %}Notification{% endif %}
@@ -21,8 +29,14 @@
 {% endif %}
 
 <div class="mt-3 flex items-center justify-end">
-    <form method="post" action="{% url 'notifications-read-all' %}" hx-post="{% url 'notifications-read-all' %}" hx-swap="none">
-        {% csrf_token %}
-        <button type="submit" class="text-xs bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 rounded-lg transition-colors">Mark all read</button>
-    </form>
+    <div class="flex items-center gap-2">
+        <form method="post" action="{% url 'notifications-clear-all' %}" hx-post="{% url 'notifications-clear-all' %}" hx-target="#notif_dropdown_body" hx-swap="innerHTML">
+            {% csrf_token %}
+            <button type="submit" class="text-xs bg-gray-700 hover:bg-gray-600 text-white px-3 py-1.5 rounded-lg transition-colors">Clear all</button>
+        </form>
+        <form method="post" action="{% url 'notifications-read-all' %}" hx-post="{% url 'notifications-read-all' %}" hx-target="#notif_dropdown_body" hx-swap="innerHTML">
+            {% csrf_token %}
+            <button type="submit" class="text-xs bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 rounded-lg transition-colors">Mark all read</button>
+        </form>
+    </div>
 </div>

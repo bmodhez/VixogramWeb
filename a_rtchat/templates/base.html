@@ -6,35 +6,85 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Vixogram - Chat. Call. Connect.</title>
 
-    <link rel="icon" type="image/jpeg" href="{% static 'favicon.jpeg' %}">
-    <link rel="shortcut icon" type="image/jpeg" href="{% static 'favicon.jpeg' %}">
-    
+    <link rel="icon" type="image/png" href="{% static 'favicon.png' %}">
+    <link rel="shortcut icon" type="image/png" href="{% static 'favicon.png' %}">
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+    <link rel="stylesheet" href="{% static 'css/style.css' %}">
+
+    <script src="{% static 'js/vixogram.js' %}"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
     <script src="https://unpkg.com/hyperscript.org@0.9.12"></script>
-
-    <style>
-        /* Smooth scrolling for chat window */
-        #chat_container { scroll-behavior: smooth; }
-    </style>
 </head>
-<body class="min-h-screen flex flex-col text-white antialiased bg-gradient-to-b from-gray-950 via-gray-900 to-gray-950">
+<body class="min-h-screen flex flex-col text-white antialiased tracking-tight bg-gradient-to-b from-gray-950 via-gray-900 to-gray-950">
+    <audio id="notif_sound" preload="auto" class="hidden" src="{% static 'notification.mp3' %}"></audio>
+    <audio id="incoming_sound" preload="auto" class="hidden" src="{% static 'incoming.wav' %}"></audio>
     <nav class="sticky top-0 z-50 bg-gray-900/80 backdrop-blur border-b border-gray-800">
-        <div class="w-full max-w-7xl mx-auto px-4 sm:px-6 py-3 sm:py-4 flex flex-wrap items-center justify-between gap-3">
-            <a href="/" class="text-lg sm:text-xl font-extrabold tracking-wide text-emerald-400 hover:text-emerald-300 transition-colors">
-                Vixogram
+        <div class="w-full max-w-7xl mx-auto px-4 sm:px-6 py-2 flex flex-wrap items-center justify-between gap-3">
+            <a href="/" class="inline-flex items-center gap-2 hover:opacity-95 transition-all duration-200 ease-out hover:-translate-y-0.5 active:translate-y-0">
+                <img src="{% static 'vixologo.png' %}" alt="Vixogram" class="h-10 sm:h-12 w-auto max-w-none object-contain object-left" />
             </a>
 
             {% if user.is_authenticated %}
                 <div class="flex flex-wrap items-center justify-end gap-2 sm:gap-3">
-                    <a href="{% url 'home' %}" class="text-xs sm:text-sm text-gray-300 hover:text-white transition-colors px-2.5 sm:px-3 py-2 rounded-lg hover:bg-gray-800">
-                        Chat
-                    </a>
+                    <button
+                        type="button"
+                        id="theme_toggle"
+                        class="text-xs sm:text-sm text-gray-300 hover:text-white transition-all duration-200 ease-out px-2.5 sm:px-3 py-2 rounded-lg hover:bg-gray-800"
+                        aria-label="Toggle theme"
+                    >
+                        <span class="inline-flex items-center gap-2">
+                            <span aria-hidden="true">🌙</span>
+                            <span class="hidden sm:inline">Dark</span>
+                        </span>
+                    </button>
+
+                    {% if CONTACT_EMAIL or CONTACT_INSTAGRAM_URL %}
+                        <div class="relative">
+                            <button
+                                type="button"
+                                id="contact_btn"
+                                class="relative text-xs sm:text-sm text-gray-300 hover:text-white transition-all duration-200 ease-out px-2.5 sm:px-3 py-2 rounded-lg hover:bg-gray-800 hover:-translate-y-0.5 active:translate-y-0"
+                                aria-label="Contact"
+                                aria-haspopup="menu"
+                                aria-expanded="false"
+                            >
+                                <span class="inline-flex items-center gap-2">
+                                    <span class="text-base" aria-hidden="true">✉️</span>
+                                    <span class="hidden sm:inline">Contact</span>
+                                </span>
+                            </button>
+
+                            <div id="contact_dropdown" class="hidden absolute right-0 mt-2 w-[min(20rem,calc(100vw-2rem))] rounded-2xl border border-gray-800 bg-gray-900/95 shadow-2xl shadow-black/30 overflow-hidden" role="menu">
+                                <div class="px-4 py-3 border-b border-gray-800 flex items-center justify-between">
+                                    <div class="text-sm font-semibold text-white">Contact</div>
+                                    <button type="button" id="contact_close" class="text-gray-300 hover:text-white transition-transform duration-200 ease-out hover:scale-110 active:scale-100">×</button>
+                                </div>
+                                <div class="px-4 py-4 space-y-2">
+                                    {% if CONTACT_EMAIL %}
+                                        <a href="mailto:{{ CONTACT_EMAIL }}" class="block px-3 py-2 rounded-xl text-sm text-gray-200 hover:bg-gray-800/60 transition-all duration-200 ease-out hover:-translate-y-0.5 active:translate-y-0">
+                                            Email: <span class="text-emerald-300 font-semibold">{{ CONTACT_EMAIL }}</span>
+                                        </a>
+                                    {% endif %}
+                                    {% if CONTACT_INSTAGRAM_URL %}
+                                        <a href="{{ CONTACT_INSTAGRAM_URL }}" target="_blank" rel="noopener noreferrer" class="block px-3 py-2 rounded-xl text-sm text-gray-200 hover:bg-gray-800/60 transition-all duration-200 ease-out hover:-translate-y-0.5 active:translate-y-0">
+                                            Instagram
+                                        </a>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+                    {% endif %}
+
                     <div class="relative">
                         <button
                             type="button"
                             id="notif_btn"
-                            class="relative text-xs sm:text-sm text-gray-300 hover:text-white transition-colors px-2.5 sm:px-3 py-2 rounded-lg hover:bg-gray-800"
+                            class="relative text-xs sm:text-sm text-gray-300 hover:text-white transition-all duration-200 ease-out px-2.5 sm:px-3 py-2 rounded-lg hover:bg-gray-800 hover:-translate-y-0.5 active:translate-y-0"
                             aria-label="Notifications"
                             aria-haspopup="menu"
                             aria-expanded="false"
@@ -52,30 +102,93 @@
                         <div id="notif_dropdown" class="hidden absolute right-0 mt-2 w-[min(22rem,calc(100vw-2rem))] rounded-2xl border border-gray-800 bg-gray-900/95 shadow-2xl shadow-black/30 overflow-hidden" role="menu">
                             <div class="px-4 py-3 border-b border-gray-800 flex items-center justify-between">
                                 <div class="text-sm font-semibold text-white">Notifications</div>
-                                <button type="button" id="notif_close" class="text-gray-300 hover:text-white">×</button>
+                                <button type="button" id="notif_close" class="text-gray-300 hover:text-white transition-transform duration-200 ease-out hover:scale-110 active:scale-100">×</button>
                             </div>
                             <div id="notif_dropdown_body" class="px-4 py-4 max-h-[22rem] overflow-y-auto">
                                 <div class="text-xs text-gray-400">Loading…</div>
                             </div>
                         </div>
                     </div>
-                    <a href="{% url 'profile' %}" class="flex items-center gap-2 px-2.5 sm:px-3 py-2 rounded-lg hover:bg-gray-800 transition-colors">
-                        <img src="{{ user.profile.avatar }}" class="w-7 h-7 sm:w-8 sm:h-8 rounded-full object-cover border border-gray-700">
-                        <span class="hidden sm:inline text-sm text-gray-200 font-semibold">{{ user.username }}</span>
-                    </a>
-                    <form method="post" action="{% url 'account_logout' %}">
-                        {% csrf_token %}
-                        <button type="submit" class="text-xs sm:text-sm bg-gray-800 hover:bg-gray-700 text-white px-3 sm:px-4 py-2 rounded-lg transition-colors">
-                            Logout
+                    <div class="relative">
+                        <button
+                            type="button"
+                            id="user_menu_btn"
+                            class="flex items-center gap-2 px-2.5 sm:px-3 py-2 rounded-lg hover:bg-gray-800 transition-all duration-200 ease-out hover:-translate-y-0.5 active:translate-y-0"
+                            aria-label="User menu"
+                            aria-haspopup="menu"
+                            aria-expanded="false"
+                        >
+                            <img src="{{ user.profile.avatar }}" class="w-7 h-7 sm:w-8 sm:h-8 rounded-full object-cover border border-gray-700">
+                            <span class="hidden sm:inline text-sm text-gray-200 font-semibold">{{ user.username }}</span>
                         </button>
-                    </form>
+
+                        <div id="user_menu" class="hidden absolute right-0 mt-2 w-[min(18rem,calc(100vw-2rem))] rounded-2xl border border-gray-800 bg-gray-900/95 shadow-2xl shadow-black/30 overflow-hidden" role="menu">
+                            <a href="{% url 'profile' %}" class="block px-4 py-3 text-sm text-gray-200 hover:bg-gray-800/60 transition-all duration-200 ease-out hover:-translate-y-0.5 active:translate-y-0">
+                                View profile
+                            </a>
+                            <a href="{% url 'contact-support' %}" class="block px-4 py-3 text-sm text-gray-200 hover:bg-gray-800/60 transition-all duration-200 ease-out hover:-translate-y-0.5 active:translate-y-0">
+                                Contact Support
+                            </a>
+                            <div class="h-px bg-gray-800"></div>
+                            <form method="post" action="{% url 'account_logout' %}" data-loading-text="Logging out…" class="m-0">
+                                {% csrf_token %}
+                                <button type="submit" class="w-full text-left px-4 py-3 text-sm text-gray-200 hover:bg-gray-800/60 transition-all duration-200 ease-out hover:-translate-y-0.5 active:translate-y-0">
+                                    Logout
+                                </button>
+                            </form>
+                        </div>
+                    </div>
                 </div>
             {% else %}
                 <div class="flex flex-wrap items-center justify-end gap-2 sm:gap-3">
-                    <a href="{% url 'account_login' %}" class="text-xs sm:text-sm text-gray-200 hover:text-white px-3 sm:px-4 py-2 rounded-lg hover:bg-gray-800 transition-colors">
+                    <button
+                        type="button"
+                        id="theme_toggle"
+                        class="text-xs sm:text-sm text-gray-200 hover:text-white px-3 sm:px-4 py-2 rounded-lg hover:bg-gray-800 transition-all duration-200 ease-out"
+                        aria-label="Toggle theme"
+                    >
+                        <span class="inline-flex items-center gap-2">
+                            <span aria-hidden="true">🌙</span>
+                            <span class="hidden sm:inline">Dark</span>
+                        </span>
+                    </button>
+
+                    {% if CONTACT_EMAIL or CONTACT_INSTAGRAM_URL %}
+                        <div class="relative">
+                            <button
+                                type="button"
+                                id="contact_btn"
+                                class="text-xs sm:text-sm text-gray-200 hover:text-white px-3 sm:px-4 py-2 rounded-lg hover:bg-gray-800 transition-all duration-200 ease-out hover:-translate-y-0.5 active:translate-y-0"
+                                aria-label="Contact"
+                                aria-haspopup="menu"
+                                aria-expanded="false"
+                            >
+                                Contact
+                            </button>
+                            <div id="contact_dropdown" class="hidden absolute right-0 mt-2 w-[min(20rem,calc(100vw-2rem))] rounded-2xl border border-gray-800 bg-gray-900/95 shadow-2xl shadow-black/30 overflow-hidden" role="menu">
+                                <div class="px-4 py-3 border-b border-gray-800 flex items-center justify-between">
+                                    <div class="text-sm font-semibold text-white">Contact</div>
+                                    <button type="button" id="contact_close" class="text-gray-300 hover:text-white transition-transform duration-200 ease-out hover:scale-110 active:scale-100">×</button>
+                                </div>
+                                <div class="px-4 py-4 space-y-2">
+                                    {% if CONTACT_EMAIL %}
+                                        <a href="mailto:{{ CONTACT_EMAIL }}" class="block px-3 py-2 rounded-xl text-sm text-gray-200 hover:bg-gray-800/60 transition-all duration-200 ease-out hover:-translate-y-0.5 active:translate-y-0">
+                                            Email: <span class="text-emerald-300 font-semibold">{{ CONTACT_EMAIL }}</span>
+                                        </a>
+                                    {% endif %}
+                                    {% if CONTACT_INSTAGRAM_URL %}
+                                        <a href="{{ CONTACT_INSTAGRAM_URL }}" target="_blank" rel="noopener noreferrer" class="block px-3 py-2 rounded-xl text-sm text-gray-200 hover:bg-gray-800/60 transition-all duration-200 ease-out hover:-translate-y-0.5 active:translate-y-0">
+                                            Instagram
+                                        </a>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+                    {% endif %}
+                    <a href="{% url 'account_login' %}" class="text-xs sm:text-sm text-gray-200 hover:text-white px-3 sm:px-4 py-2 rounded-lg hover:bg-gray-800 transition-all duration-200 ease-out hover:-translate-y-0.5 active:translate-y-0">
                         Login
                     </a>
-                    <a href="{% url 'account_signup' %}" class="text-xs sm:text-sm bg-emerald-500 hover:bg-emerald-600 text-white px-3 sm:px-4 py-2 rounded-lg transition-colors">
+                    <a href="{% url 'account_signup' %}" class="text-xs sm:text-sm text-white px-3 sm:px-4 py-2 rounded-lg bg-gradient-to-r from-[#8E2DE2] to-[#4A00E0] hover:from-[#9b3cf0] hover:to-[#5a1cff] transition-transform duration-200 hover:scale-[1.02] shadow-lg shadow-[#4A00E0]/20 hover:shadow-[#8E2DE2]/30">
                         Sign up
                     </a>
                 </div>
@@ -84,7 +197,7 @@
     </nav>
 
     {% if messages %}
-        <div id="toast-container" class="fixed top-20 right-6 z-50 w-[min(24rem,calc(100vw-3rem))] space-y-3 pointer-events-none">
+        <div id="toast-container" class="fixed top-16 right-3 sm:top-20 sm:right-6 z-50 w-[min(24rem,calc(100vw-3rem))] space-y-3 pointer-events-none">
             {% for message in messages %}
                 {% with tags=message.tags %}
                     <div
@@ -111,10 +224,39 @@
         </div>
     {% endif %}
 
-    <main class="w-full max-w-7xl mx-auto px-4 sm:px-6 py-5 sm:py-6 flex-1">
-        {% block content %}
-        {% endblock %}
-    </main>
+    <div class="w-full flex-1">
+        <div class="w-full px-4 sm:px-6 py-5 sm:py-6">
+            <div class="grid grid-cols-1 min-[1536px]:grid-cols-[max-content_minmax(0,80rem)_max-content] gap-3 items-start justify-center">
+                <!-- Side ad slots (in-flow so they never overlap content) -->
+                <aside class="hidden min-[1536px]:block">
+                    <div class="sticky top-24">
+                        <div class="rounded-2xl border border-gray-800 bg-gray-900/50 p-3 text-center">
+                            <div class="text-[10px] uppercase tracking-widest text-gray-400">Advertisement</div>
+                            <div class="mt-3 min-h-[600px] min-w-[160px] rounded-xl border border-gray-800 bg-gray-950/40 flex items-center justify-center text-xs text-gray-500">
+                                Place Ad (160×600)
+                            </div>
+                        </div>
+                    </div>
+                </aside>
+
+                <main class="min-w-0">
+                    {% block content %}
+                    {% endblock %}
+                </main>
+
+                <aside class="hidden min-[1536px]:block">
+                    <div class="sticky top-24">
+                        <div class="rounded-2xl border border-gray-800 bg-gray-900/50 p-3 text-center">
+                            <div class="text-[10px] uppercase tracking-widest text-gray-400">Advertisement</div>
+                            <div class="mt-3 min-h-[600px] min-w-[160px] rounded-xl border border-gray-800 bg-gray-950/40 flex items-center justify-center text-xs text-gray-500">
+                                Place Ad (160×600)
+                            </div>
+                        </div>
+                    </div>
+                </aside>
+            </div>
+        </div>
+    </div>
 
     <div id="confirm-modal" class="fixed inset-0 z-50 hidden" aria-hidden="true">
         <div class="absolute inset-0 bg-black/60"></div>
@@ -138,687 +280,72 @@
         </div>
     </div>
 
-    <footer class="w-full border-t border-gray-800 bg-gray-900/40 backdrop-blur">
-        <div class="w-full max-w-7xl mx-auto px-4 sm:px-6 py-5 text-center">
-            <p class="text-sm text-gray-300 tracking-wide">
-                Made in <span class="text-emerald-400">❤</span> with
-                <span class="font-semibold text-gray-100">Bhavin</span>
-                <span class="text-gray-500">•</span>
-                <a
-                    class="font-semibold text-emerald-400 hover:text-emerald-300 transition-colors"
-                    href="https://www.instagram.com/bhavinmodhh/"
-                    target="_blank"
-                    rel="noopener noreferrer"
+    <div id="image-viewer" class="fixed inset-0 z-50 hidden" aria-hidden="true" role="dialog" aria-label="Image viewer">
+        <div class="absolute inset-0 bg-black/80" data-image-viewer-backdrop></div>
+        <div class="relative min-h-full flex items-center justify-center p-4 sm:p-6">
+            <div class="relative max-w-[90vw] max-h-[85vh]">
+                <button
+                    type="button"
+                    class="absolute -top-4 -right-4 sm:-top-5 sm:-right-5 inline-flex h-10 w-10 items-center justify-center rounded-full border border-gray-800 bg-gray-900/95 text-gray-200 hover:text-white hover:bg-gray-800 transition"
+                    aria-label="Close"
+                    data-image-viewer-close
                 >
-                    Instagram
-                </a>
-            </p>
+                    <span aria-hidden="true">×</span>
+                </button>
+                <img
+                    id="image-viewer-img"
+                    class="block max-w-[90vw] max-h-[85vh] object-contain rounded-2xl border border-gray-800 bg-gray-950/40"
+                    src=""
+                    alt=""
+                />
+            </div>
         </div>
-    </footer>
+    </div>
 
-    <script>
-    function getCookie(name) {
-        let cookieValue = null;
-        if (document.cookie && document.cookie !== '') {
-            const cookies = document.cookie.split(';');
-            for (let i = 0; i < cookies.length; i++) {
-                const cookie = cookies[i].trim();
-                if (cookie.substring(0, name.length + 1) === (name + '=')) {
-                    cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
-                    break;
-                }
-            }
-        }
-        return cookieValue;
-    }
-    document.body.addEventListener('htmx:configRequest', (event) => {
-        event.detail.headers['X-CSRFToken'] = getCookie('csrftoken');
-    });
-
-    function scrollToBottom() {
-        const chatContainer = document.getElementById('chat_container');
-        if (chatContainer) {
-            chatContainer.scrollTop = chatContainer.scrollHeight;
-        }
-    }
-
-    (function initToasts() {
-        const container = document.getElementById('toast-container');
-        if (!container) return;
-
-        const toasts = container.querySelectorAll('.toast');
-        toasts.forEach((toast) => {
-            let dismissed = false;
-            const duration = Number(toast.getAttribute('data-duration') || '4000');
-            const closeBtn = toast.querySelector('[data-toast-close]');
-
-            const dismiss = () => {
-                if (dismissed) return;
-                dismissed = true;
-                toast.classList.add('opacity-0', '-translate-y-1');
-                toast.classList.add('transform');
-                window.setTimeout(() => {
-                    toast.remove();
-                    if (container.childElementCount === 0) container.remove();
-                }, 220);
-            };
-
-            if (closeBtn) closeBtn.addEventListener('click', dismiss);
-            window.setTimeout(dismiss, Math.max(1000, duration));
-        });
-    })();
-
-    (function initCustomConfirm() {
-        const modal = document.getElementById('confirm-modal');
-        const titleEl = document.getElementById('confirm-title');
-        const msgEl = document.getElementById('confirm-message');
-        const okBtn = document.getElementById('confirm-ok');
-        const cancelBtn = document.getElementById('confirm-cancel');
-
-        if (!modal || !okBtn || !cancelBtn || !titleEl || !msgEl) return;
-
-        let pendingAction = null;
-
-        const open = ({ title, message, onConfirm }) => {
-            titleEl.textContent = title || 'Confirm';
-            msgEl.textContent = message || 'Are you sure?';
-            pendingAction = onConfirm || null;
-            modal.classList.remove('hidden');
-            modal.setAttribute('aria-hidden', 'false');
-        };
-
-        const close = () => {
-            modal.classList.add('hidden');
-            modal.setAttribute('aria-hidden', 'true');
-            pendingAction = null;
-        };
-
-        okBtn.addEventListener('click', () => {
-            const fn = pendingAction;
-            close();
-            if (typeof fn === 'function') fn();
-        });
-        cancelBtn.addEventListener('click', close);
-        modal.addEventListener('click', (e) => {
-            if (e.target === modal || e.target === modal.firstElementChild) close();
-        });
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') close();
-        });
-
-        // Intercept submit/click based on data-confirm
-        document.addEventListener('submit', (e) => {
-            const form = e.target;
-            if (!(form instanceof HTMLFormElement)) return;
-            const message = form.getAttribute('data-confirm');
-            if (!message) return;
-            e.preventDefault();
-            open({
-                title: form.getAttribute('data-confirm-title') || 'Confirm',
-                message,
-                onConfirm: () => form.submit(),
-            });
-        }, true);
-
-        document.addEventListener('click', (e) => {
-            const btn = e.target && e.target.closest ? e.target.closest('[data-confirm]') : null;
-            if (!btn) return;
-            // If it is inside a form, submit handler will handle it.
-            if (btn.closest('form')) return;
-            const message = btn.getAttribute('data-confirm');
-            if (!message) return;
-            e.preventDefault();
-            open({
-                title: btn.getAttribute('data-confirm-title') || 'Confirm',
-                message,
-                onConfirm: () => {
-                    if (btn.tagName === 'A' && btn.href) window.location.href = btn.href;
-                    else btn.click();
-                },
-            });
-        }, true);
-    })();
-
-    (function initVideoDecodeFallback() {
-        // Media element errors do not bubble reliably; capture is required.
-        document.addEventListener('error', (e) => {
-            const el = e && e.target;
-            if (!el || el.tagName !== 'VIDEO') return;
-            const wrap = el.parentElement;
-            if (!wrap) return;
-            const fallback = wrap.querySelector('[data-video-fallback]');
-            if (fallback) fallback.classList.remove('hidden');
-        }, true);
-
-        document.addEventListener('loadeddata', (e) => {
-            const el = e && e.target;
-            if (!el || el.tagName !== 'VIDEO') return;
-            const wrap = el.parentElement;
-            if (!wrap) return;
-            const fallback = wrap.querySelector('[data-video-fallback]');
-            if (fallback) fallback.classList.add('hidden');
-        }, true);
-    })();
-
-    {% if user.is_authenticated %}
-    (function initGlobalCallInvites() {
-        // Lets chat pages know a global handler exists (avoid duplicate toasts)
-        window.__hasGlobalCallInvite = true;
-        window.__hasGlobalMentionNotify = true;
-
-        const wsScheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
-        const wsUrl = `${wsScheme}://${window.location.host}/ws/notify/`;
-
-        // -------- Ringtone (incoming) --------
-        let audioCtx = null;
-        let ringTimer = null;
-        let audioUnlocked = false;
-        const recentInvites = new Map();
-        const recentMentions = new Map();
-        let notifUnread = parseInt('{{ NAV_NOTIF_UNREAD|default:0 }}', 10) || 0;
-
-        function updateNotifBadge() {
-            const el = document.getElementById('nav_notif_badge');
-            if (!el) return;
-            if (notifUnread > 0) {
-                el.textContent = notifUnread > 99 ? '99+' : String(notifUnread);
-                el.classList.remove('hidden');
-            } else {
-                el.classList.add('hidden');
-            }
-        }
-
-        function bumpNotifUnread() {
-            notifUnread = Math.min(999, (notifUnread || 0) + 1);
-            updateNotifBadge();
-        }
-
-        function isOnChatRoom(roomName) {
-            try {
-                if (!roomName) return false;
-                return window.location.pathname.startsWith('/chat/room/') && window.location.pathname.endsWith('/' + encodeURIComponent(roomName));
-            } catch {
-                return false;
-            }
-        }
-
-        function initNotifDropdown() {
-            const btn = document.getElementById('notif_btn');
-            const panel = document.getElementById('notif_dropdown');
-            const closeBtn = document.getElementById('notif_close');
-            if (!btn || !panel) return;
-
-            const open = () => {
-                panel.classList.remove('hidden');
-                btn.setAttribute('aria-expanded', 'true');
-                try {
-                    if (window.htmx && typeof window.htmx.ajax === 'function') {
-                        const url = btn.getAttribute('hx-get');
-                        if (url) window.htmx.ajax('GET', url, { target: '#notif_dropdown_body', swap: 'innerHTML' });
-                    }
-                } catch {}
-            };
-            const close = () => {
-                panel.classList.add('hidden');
-                btn.setAttribute('aria-expanded', 'false');
-            };
-            const toggle = () => {
-                if (panel.classList.contains('hidden')) open();
-                else close();
-            };
-
-            btn.addEventListener('click', (e) => {
-                e.preventDefault();
-                toggle();
-            });
-            if (closeBtn) closeBtn.addEventListener('click', (e) => {
-                e.preventDefault();
-                close();
-            });
-
-            document.addEventListener('click', (e) => {
-                const t = e.target;
-                if (!t) return;
-                if (panel.classList.contains('hidden')) return;
-                if (panel.contains(t) || btn.contains(t)) return;
-                close();
-            }, true);
-
-            document.body.addEventListener('htmx:afterRequest', (e) => {
-                // If mark-all-read ran from dropdown, clear badge.
-                const target = e && e.target;
-                if (!target) return;
-                if (target.getAttribute && String(target.getAttribute('hx-post') || '').includes('notifications/read-all')) {
-                    notifUnread = 0;
-                    updateNotifBadge();
-                }
-            });
-        }
-
-        updateNotifBadge();
-        initNotifDropdown();
-
-        function unlockAudioOnce() {
-            if (audioUnlocked) return;
-            try {
-                audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
-                const o = audioCtx.createOscillator();
-                const g = audioCtx.createGain();
-                g.gain.value = 0.00001;
-                o.connect(g);
-                g.connect(audioCtx.destination);
-                o.start();
-                o.stop(audioCtx.currentTime + 0.01);
-                audioUnlocked = true;
-            } catch {
-                // ignore
-            }
-        }
-        document.addEventListener('click', unlockAudioOnce, { once: true, capture: true });
-
-        function stopIncomingRing() {
-            if (ringTimer) {
-                clearInterval(ringTimer);
-                ringTimer = null;
-            }
-        }
-
-        function playIncomingRing() {
-            try {
-                audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
-                if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
-            } catch {
-                return;
-            }
-
-            stopIncomingRing();
-
-            const ringOnce = () => {
-                try {
-                    const ctx = audioCtx;
-                    const now = ctx.currentTime;
-                    const g = ctx.createGain();
-                    g.gain.setValueAtTime(0.0001, now);
-                    g.gain.exponentialRampToValueAtTime(0.15, now + 0.02);
-                    g.gain.exponentialRampToValueAtTime(0.0001, now + 1.8);
-                    g.connect(ctx.destination);
-
-                    const o1 = ctx.createOscillator();
-                    const o2 = ctx.createOscillator();
-                    o1.type = 'sine';
-                    o2.type = 'sine';
-                    o1.frequency.setValueAtTime(480, now);
-                    o2.frequency.setValueAtTime(620, now);
-                    o1.connect(g);
-                    o2.connect(g);
-                    o1.start(now);
-                    o2.start(now);
-                    o1.stop(now + 1.9);
-                    o2.stop(now + 1.9);
-                } catch {
-                    // ignore
-                }
-            };
-
-            ringOnce();
-            ringTimer = setInterval(ringOnce, 5000);
-        }
-
-        function ensureIncomingContainer() {
-            let c = document.getElementById('incoming-call-container');
-            if (c) return c;
-            c = document.createElement('div');
-            c.id = 'incoming-call-container';
-            c.className = 'fixed top-24 right-6 z-50 w-[min(24rem,calc(100vw-3rem))] space-y-3';
-            document.body.appendChild(c);
-            return c;
-        }
-
-        async function declineInvite(callEventUrl, callType) {
-            if (!callEventUrl) return;
-            try {
-                const body = new URLSearchParams();
-                body.set('action', 'decline');
-                body.set('type', callType || 'voice');
-                await fetch(callEventUrl, {
-                    method: 'POST',
-                    credentials: 'same-origin',
-                    headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded',
-                        'X-CSRFToken': getCookie('csrftoken'),
-                    },
-                    body,
-                });
-            } catch {
-                // ignore
-            }
-        }
-
-        function showIncomingCall(payload) {
-            const from = payload.from_username || 'Someone';
-            const type = (payload.call_type || 'voice').toLowerCase() === 'video' ? 'video' : 'voice';
-            const room = payload.chatroom_name || '';
-            const key = `${room}:${type}:${from}`;
-            const now = Date.now();
-            const last = recentInvites.get(key) || 0;
-            if (now - last < 1200) return;
-            recentInvites.set(key, now);
-
-            const callUrl = payload.call_url || '';
-            const callEventUrl = payload.call_event_url || '';
-            if (!callUrl) return;
-
-            playIncomingRing();
-
-            const container = ensureIncomingContainer();
-            const toast = document.createElement('div');
-            toast.className = 'pointer-events-auto flex items-start gap-3 rounded-xl border border-gray-800 bg-gray-900/90 px-4 py-3 text-sm text-gray-100 shadow-lg shadow-black/20';
-            toast.innerHTML = `
-                <div class="mt-0.5 h-2.5 w-2.5 flex-none rounded-full bg-emerald-400"></div>
-                <div class="flex-1">
-                    <div class="font-semibold">Incoming ${type === 'video' ? 'video' : 'voice'} call</div>
-                    <div class="text-gray-300 text-xs mt-0.5">from ${from}${room ? ` • room ${room}` : ''}</div>
-                    <div class="mt-3 flex gap-2">
-                        <a href="${callUrl}" class="text-xs bg-emerald-500 hover:bg-emerald-600 text-white px-3 py-1.5 rounded-lg transition-colors">Accept</a>
-                        <button type="button" data-decline class="text-xs bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 rounded-lg transition-colors">Decline</button>
-                    </div>
-                </div>
-                <button type="button" data-close class="-mr-1 -mt-1 inline-flex h-8 w-8 items-center justify-center rounded-lg text-gray-300 hover:text-white hover:bg-gray-800/60 transition" aria-label="Dismiss">
+    <div id="video-viewer" class="fixed inset-0 z-50 hidden" aria-hidden="true" role="dialog" aria-label="Video viewer">
+        <div class="absolute inset-0 bg-black/80" data-video-viewer-backdrop></div>
+        <div class="relative min-h-full flex items-center justify-center p-4 sm:p-6">
+            <div class="relative w-[min(90vw,64rem)]">
+                <button
+                    type="button"
+                    class="absolute -top-4 -right-4 sm:-top-5 sm:-right-5 inline-flex h-10 w-10 items-center justify-center rounded-full border border-gray-800 bg-gray-900/95 text-gray-200 hover:text-white hover:bg-gray-800 transition"
+                    aria-label="Close"
+                    data-video-viewer-close
+                >
                     <span aria-hidden="true">×</span>
                 </button>
-            `;
-
-            const removeToast = () => {
-                toast.classList.add('opacity-0');
-                setTimeout(() => toast.remove(), 200);
-                stopIncomingRing();
-            };
-
-            toast.querySelector('[data-close]')?.addEventListener('click', removeToast);
-            toast.querySelector('[data-decline]')?.addEventListener('click', async () => {
-                await declineInvite(callEventUrl, type);
-                removeToast();
-            });
-            const accept = toast.querySelector('a');
-            if (accept) accept.addEventListener('click', stopIncomingRing);
-
-            setTimeout(removeToast, 15000);
-            container.appendChild(toast);
-        }
-
-        function showMention(payload) {
-            const from = payload.from_username || 'Someone';
-            const room = payload.chatroom_name || '';
-            const messageId = payload.message_id || 0;
-            const preview = (payload.preview || '').trim();
-
-            if (!room) return;
-
-            // If user is already inside that room, they can see the message.
-            if (isOnChatRoom(room)) return;
-
-            const key = `${room}:${from}:${messageId}`;
-            const now = Date.now();
-            const last = recentMentions.get(key) || 0;
-            if (now - last < 1200) return;
-            recentMentions.set(key, now);
-
-            const url = `/chat/room/${encodeURIComponent(room)}`;
-
-            // Badge: only when user is not already on that room.
-            bumpNotifUnread();
-
-            const container = ensureIncomingContainer();
-            const toast = document.createElement('div');
-            toast.className = 'pointer-events-auto flex items-start gap-3 rounded-xl border border-gray-800 bg-gray-900/90 px-4 py-3 text-sm text-gray-100 shadow-lg shadow-black/20';
-            toast.innerHTML = `
-                <div class="mt-0.5 h-2.5 w-2.5 flex-none rounded-full bg-emerald-400"></div>
-                <div class="flex-1 min-w-0">
-                    <div class="font-semibold">You were mentioned</div>
-                    <div class="text-gray-300 text-xs mt-0.5">by @${from} • room ${room}</div>
-                    ${preview ? `<div class="mt-2 text-xs text-gray-300 truncate">${escapeHtml(preview)}</div>` : ''}
-                    <div class="mt-3">
-                        <a href="${url}" class="text-xs bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 rounded-lg transition-colors">Open chat</a>
-                    </div>
+                <div class="rounded-2xl border border-gray-800 bg-gray-950/40 overflow-hidden">
+                    <video
+                        id="video-viewer-video"
+                        class="w-full h-auto bg-black/40"
+                        controls
+                        playsinline
+                        preload="metadata"
+                    >
+                        <source id="video-viewer-source" src="" />
+                        Your browser can't play this video.
+                    </video>
                 </div>
-                <button type="button" data-close class="-mr-1 -mt-1 inline-flex h-8 w-8 items-center justify-center rounded-lg text-gray-300 hover:text-white hover:bg-gray-800/60 transition" aria-label="Dismiss">
-                    <span aria-hidden="true">×</span>
-                </button>
-            `;
+            </div>
+        </div>
+    </div>
 
-            const removeToast = () => {
-                toast.classList.add('opacity-0');
-                setTimeout(() => toast.remove(), 200);
-            };
+    <div id="global-loading" class="fixed inset-0 z-50 hidden items-center justify-center pointer-events-none">
+        <div class="flex items-center gap-2 rounded-xl border border-gray-800 bg-gray-900/90 px-4 py-3 text-xs text-gray-100 shadow-lg shadow-black/20">
+            <div class="w-4 h-4 rounded-full border-2 border-gray-600 border-t-emerald-500 animate-spin"></div>
+            <span id="global-loading-text">Loading…</span>
+        </div>
+    </div>
 
-            toast.querySelector('[data-close]')?.addEventListener('click', removeToast);
-            setTimeout(removeToast, 12000);
-            container.appendChild(toast);
-        }
+    <!-- Footer removed (Contact lives in navbar) -->
 
-        function escapeHtml(str) {
-            return String(str)
-                .replaceAll('&', '&amp;')
-                .replaceAll('<', '&lt;')
-                .replaceAll('>', '&gt;')
-                .replaceAll('"', '&quot;')
-                .replaceAll("'", '&#039;');
-        }
-
-        function connect() {
-            let socket;
-            try {
-                socket = new WebSocket(wsUrl);
-            } catch {
-                return;
-            }
-
-            socket.onmessage = function (event) {
-                let payload;
-                try { payload = JSON.parse(event.data); } catch { return; }
-                if (payload.type === 'call_invite') showIncomingCall(payload);
-                if (payload.type === 'mention') showMention(payload);
-                if (payload.type === 'reply') {
-                    // Treat reply like mention for toasts.
-                    showMention({
-                        from_username: payload.from_username,
-                        chatroom_name: payload.chatroom_name,
-                        message_id: payload.message_id,
-                        preview: payload.preview,
-                    });
-                }
-                if (payload.type === 'follow') {
-                    const from = payload.from_username || 'Someone';
-                    bumpNotifUnread();
-                    const container = ensureIncomingContainer();
-                    const toast = document.createElement('div');
-                    toast.className = 'pointer-events-auto flex items-start gap-3 rounded-xl border border-gray-800 bg-gray-900/90 px-4 py-3 text-sm text-gray-100 shadow-lg shadow-black/20';
-                    const url = payload.url || '/';
-                    const preview = (payload.preview || '').trim();
-                    toast.innerHTML = `
-                        <div class="mt-0.5 h-2.5 w-2.5 flex-none rounded-full bg-emerald-400"></div>
-                        <div class="flex-1 min-w-0">
-                            <div class="font-semibold">New follower</div>
-                            <div class="text-gray-300 text-xs mt-0.5">@${escapeHtml(from)}</div>
-                            ${preview ? `<div class="mt-2 text-xs text-gray-300 truncate">${escapeHtml(preview)}</div>` : ''}
-                            <div class="mt-3">
-                                <a href="${url}" class="text-xs bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 rounded-lg transition-colors">Open profile</a>
-                            </div>
-                        </div>
-                        <button type="button" data-close class="-mr-1 -mt-1 inline-flex h-8 w-8 items-center justify-center rounded-lg text-gray-300 hover:text-white hover:bg-gray-800/60 transition" aria-label="Dismiss">
-                            <span aria-hidden="true">×</span>
-                        </button>
-                    `;
-                    const removeToast = () => { toast.classList.add('opacity-0'); setTimeout(() => toast.remove(), 200); };
-                    toast.querySelector('[data-close]')?.addEventListener('click', removeToast);
-                    setTimeout(removeToast, 12000);
-                    container.appendChild(toast);
-                }
-            };
-            socket.onclose = function () {
-                setTimeout(connect, 1200);
-            };
-        }
-
-        connect();
-    })();
-    {% endif %}
-
-    {% if user.is_authenticated and FIREBASE_ENABLED %}
-    (function initFcmWebPush() {
-        if (!('serviceWorker' in navigator)) return;
-        if (!('Notification' in window)) return;
-
-        const vapidKey = '{{ FIREBASE_VAPID_PUBLIC_KEY|default:""|escapejs }}';
-        let cfg = {};
-        try { cfg = JSON.parse('{{ FIREBASE_CONFIG_JSON|default:"{}"|escapejs }}'); } catch { cfg = {}; }
-        if (!vapidKey || !cfg || !cfg.messagingSenderId) return;
-
-        function postToken(token) {
-            if (!token) return;
-            const body = new URLSearchParams();
-            body.set('token', token);
-            fetch('{% url "push-register" %}', {
-                method: 'POST',
-                credentials: 'same-origin',
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'X-CSRFToken': (typeof getCookie === 'function' ? getCookie('csrftoken') : ''),
-                },
-                body,
-            }).catch(() => {});
-        }
-
-        async function init() {
-            // Load Firebase SDK (compat) lazily so non-FCM pages stay fast.
-            const loadScript = (src) => new Promise((resolve, reject) => {
-                const s = document.createElement('script');
-                s.src = src;
-                s.async = true;
-                s.onload = resolve;
-                s.onerror = reject;
-                document.head.appendChild(s);
-            });
-
-            try {
-                await loadScript('https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js');
-                await loadScript('https://www.gstatic.com/firebasejs/10.7.1/firebase-messaging-compat.js');
-            } catch {
-                return;
-            }
-
-            if (!window.firebase || !firebase.initializeApp) return;
-
-            try {
-                // Avoid double-init if another script already did it.
-                if (!firebase.apps || !firebase.apps.length) firebase.initializeApp(cfg);
-            } catch {
-                // ignore
-            }
-
-            let registration;
-            try {
-                registration = await navigator.serviceWorker.register('/firebase-messaging-sw.js');
-            } catch {
-                return;
-            }
-
-            if (Notification.permission === 'denied') return;
-
-            let messaging;
-            try {
-                messaging = firebase.messaging();
-            } catch {
-                return;
-            }
-
-            let tokenSetupDone = false;
-            async function setupTokenOnce() {
-                if (tokenSetupDone) return;
-                tokenSetupDone = true;
-                try {
-                    const token = await messaging.getToken({ vapidKey, serviceWorkerRegistration: registration });
-                    postToken(token);
-                } catch {
-                    // ignore
-                }
-            }
-
-            async function ensurePermissionViaGesture() {
-                if (Notification.permission === 'granted') return true;
-                if (Notification.permission === 'denied') return false;
-                try {
-                    const p = await Notification.requestPermission();
-                    return p === 'granted';
-                } catch {
-                    return false;
-                }
-            }
-
-            // If already granted, register immediately. Otherwise wait for the first user click
-            // (most browsers require a user gesture to show the permission prompt reliably).
-            if (Notification.permission === 'granted') {
-                await setupTokenOnce();
-            } else if (Notification.permission !== 'denied') {
-                document.addEventListener('click', async () => {
-                    const ok = await ensurePermissionViaGesture();
-                    if (ok) await setupTokenOnce();
-                }, { once: true, capture: true });
-            }
-
-            // Foreground messages (tab open) -> if the tab isn't visible, show a native notification.
-            // Use service worker notifications so click handling works consistently.
-            try {
-                messaging.onMessage((payload) => {
-                    try {
-                        if (document.visibilityState === 'visible') return;
-                        const n = (payload && payload.notification) || {};
-                        const data = (payload && payload.data) || {};
-                        const title = n.title || data.title || 'Vixo Connect';
-                        const opts = {
-                            body: n.body || data.body || '',
-                            icon: n.icon || '/static/favicon.ico',
-                            data: { url: data.url || '/' },
-                        };
-                        if (registration && registration.showNotification) {
-                            registration.showNotification(title, opts);
-                        } else {
-                            const notif = new Notification(title, opts);
-                            notif.onclick = () => {
-                                try { window.open(opts.data.url || '/', '_blank'); } catch {}
-                            };
-                        }
-                    } catch {
-                        // ignore
-                    }
-                });
-            } catch {
-                // ignore
-            }
-        }
-
-        init();
-    })();
-    {% endif %}
-
-    {% if user.is_authenticated %}
-    (function initNavNotifBadge() {
-        try {
-            const unread = parseInt('{{ NAV_NOTIF_UNREAD|default:0 }}', 10) || 0;
-            const el = document.getElementById('nav_notif_badge');
-            if (!el) return;
-            if (unread > 0) {
-                el.textContent = unread > 99 ? '99+' : String(unread);
-                el.classList.remove('hidden');
-            } else {
-                el.classList.add('hidden');
-            }
-        } catch {
-            // ignore
-        }
-    })();
-    {% endif %}
-</script>
+    <script id="vixo-config" type="application/json">{
+        "userAuthenticated": {% if user.is_authenticated %}true{% else %}false{% endif %},
+        "navNotifUnread": {{ NAV_NOTIF_UNREAD|default:0 }},
+        "firebaseEnabled": {% if user.is_authenticated and FIREBASE_ENABLED %}true{% else %}false{% endif %},
+        "pushRegisterUrl": "{% url 'push-register' %}",
+        "pushConfigUrl": "{% url 'push-config' %}"
+    }</script>
 
 {% block extra_body %}{% endblock %}
 </body>

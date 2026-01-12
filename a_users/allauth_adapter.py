@@ -7,11 +7,18 @@ from allauth.account import adapter as allauth_adapter_module
 from django.conf import settings
 from django.contrib import messages
 
+from .username_policy import validate_public_username
+
 
 logger = logging.getLogger(__name__)
 
 
 class CustomAccountAdapter(DefaultAccountAdapter):
+    def clean_username(self, username, *args, **kwargs):
+        username = super().clean_username(username, *args, **kwargs)
+        validate_public_username(username)
+        return username
+
     def send_mail(self, template_prefix: str, email: str, context: dict) -> None:
         try:
             return super().send_mail(template_prefix, email, context)

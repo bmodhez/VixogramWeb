@@ -2,14 +2,26 @@ from __future__ import annotations
 
 from allauth.account.forms import LoginForm, SignupForm, ResetPasswordForm, ResetPasswordKeyForm
 
+from django.conf import settings
+from django.core.exceptions import ValidationError
+
+from .username_policy import validate_public_username
+from .recaptcha import verify_recaptcha
+
 
 _BASE_INPUT_CLASS = (
     "w-full bg-gray-800/60 border border-gray-700 text-gray-100 rounded-xl "
-    "px-4 py-3 placeholder-gray-400 outline-none "
-    "focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/30"
+    "pl-4 pr-4 py-3 placeholder-gray-400 outline-none "
+    "focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/30"
 )
 
-_CHECKBOX_CLASS = "accent-emerald-500"
+_LOGIN_INPUT_CLASS = (
+    "w-full bg-gray-800/60 border border-gray-700 text-gray-100 rounded-xl "
+    "pl-4 pr-4 py-3 placeholder-gray-400 outline-none "
+    "focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/30"
+)
+
+_CHECKBOX_CLASS = "accent-indigo-500"
 
 
 class CustomLoginForm(LoginForm):
@@ -19,7 +31,7 @@ class CustomLoginForm(LoginForm):
         if "login" in self.fields:
             self.fields["login"].widget.attrs.update(
                 {
-                    "class": _BASE_INPUT_CLASS,
+                    "class": f"{_LOGIN_INPUT_CLASS} !pl-12",
                     "placeholder": "Username or email",
                     "autocomplete": "username",
                 }
@@ -28,7 +40,7 @@ class CustomLoginForm(LoginForm):
         if "password" in self.fields:
             self.fields["password"].widget.attrs.update(
                 {
-                    "class": _BASE_INPUT_CLASS,
+                    "class": f"{_LOGIN_INPUT_CLASS} !pl-12",
                     "placeholder": "Password",
                     "autocomplete": "current-password",
                 }
@@ -39,6 +51,43 @@ class CustomLoginForm(LoginForm):
 
 
 class CustomSignupForm(SignupForm):
+    def clean(self):
+        cleaned = super().clean()
+
+        if bool(getattr(settings, 'RECAPTCHA_REQUIRED', False)):
+            token = (self.data.get('g-recaptcha-response') or '').strip()
+            if not token:
+                raise ValidationError('Please complete the reCAPTCHA.')
+
+            req = getattr(self, 'request', None)
+            remote_ip = None
+            try:
+                remote_ip = (req.META.get('REMOTE_ADDR') or '').strip() if req else None
+            except Exception:
+                remote_ip = None
+
+            version = (getattr(settings, 'RECAPTCHA_VERSION', 'v2') or 'v2').strip().lower()
+            if version == 'v3':
+                expected_action = (getattr(settings, 'RECAPTCHA_ACTION', 'signup') or 'signup').strip() or 'signup'
+                min_score = float(getattr(settings, 'RECAPTCHA_MIN_SCORE', 0.5))
+                ok, _data = verify_recaptcha(
+                    token=token,
+                    remote_ip=remote_ip,
+                    expected_action=expected_action,
+                    min_score=min_score,
+                )
+            else:
+                ok, _data = verify_recaptcha(token=token, remote_ip=remote_ip)
+            if not ok:
+                raise ValidationError('reCAPTCHA verification failed. Please try again.')
+
+        return cleaned
+
+    def clean_username(self):
+        username = super().clean_username()
+        validate_public_username(username)
+        return username
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -46,7 +95,7 @@ class CustomSignupForm(SignupForm):
             if name in {"password1", "password2"}:
                 field.widget.attrs.update(
                     {
-                        "class": _BASE_INPUT_CLASS,
+                        "class": f"{_BASE_INPUT_CLASS} !pl-12",
                         "placeholder": "Password" if name == "password1" else "Confirm password",
                         "autocomplete": "new-password",
                     }
@@ -56,7 +105,7 @@ class CustomSignupForm(SignupForm):
             if name == "email":
                 field.widget.attrs.update(
                     {
-                        "class": _BASE_INPUT_CLASS,
+                        "class": f"{_BASE_INPUT_CLASS} !pl-12",
                         "placeholder": "Email address",
                         "autocomplete": "email",
                     }
@@ -66,7 +115,7 @@ class CustomSignupForm(SignupForm):
             if name == "username":
                 field.widget.attrs.update(
                     {
-                        "class": _BASE_INPUT_CLASS,
+                        "class": f"{_BASE_INPUT_CLASS} !pl-12",
                         "placeholder": "Username",
                         "autocomplete": "username",
                     }

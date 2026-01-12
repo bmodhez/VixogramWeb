@@ -1,4 +1,5 @@
 import json
+from datetime import timedelta
 
 from django.shortcuts import render, get_object_or_404, redirect 
 from django.contrib.auth.decorators import login_required
@@ -12,17 +13,24 @@ from django.core.cache import cache
 from django.views.decorators.csrf import csrf_exempt
 from django.conf import settings
 from django.urls import reverse
+from django.db import transaction
 from django.db.models import Q
 from django.db.models import Count
 from django.utils.http import url_has_allowed_host_and_scheme
+from a_users.badges import get_verified_user_ids
 from a_users.models import Profile
 from a_users.models import FCMToken
+from a_users.models import UserReport
 from .models import *
 from .forms import *
 from .agora import build_rtc_token
 from .moderation import moderate_message
 from .channels_utils import chatroom_channel_group_name
 from .mentions import extract_mention_usernames, resolve_mentioned_users
+from a_rtchat.link_policy import contains_link
+from .room_policy import room_allows_links, room_allows_uploads
+from .auto_badges import attach_auto_badges
+from .natasha_bot import trigger_natasha_reply_after_commit, NATASHA_USERNAME
 
 
 @login_required
@@ -57,7 +65,6 @@ def push_register(request):
 
     return JsonResponse({'ok': True})
 
-
 @login_required
 def push_unregister(request):
     if request.method != 'POST':
@@ -79,9 +86,37 @@ from .rate_limit import (
 )
 
 
+def _celery_broker_configured() -> bool:
+    try:
+        env_broker = (os.environ.get('CELERY_BROKER_URL') or '').strip()
+        settings_broker = (getattr(settings, 'CELERY_BROKER_URL', None) or '').strip()
+        return bool(env_broker or settings_broker)
+    except Exception:
+        return False
+
+
 CHAT_UPLOAD_LIMIT_PER_ROOM = getattr(settings, 'CHAT_UPLOAD_LIMIT_PER_ROOM', 5)
 CHAT_UPLOAD_MAX_BYTES = getattr(settings, 'CHAT_UPLOAD_MAX_BYTES', 10 * 1024 * 1024)
 CHAT_REACTION_EMOJIS = getattr(settings, 'CHAT_REACTION_EMOJIS', ['👍', '❤️', '😂', '😮', '😢', '🙏'])
+PRIVATE_ROOM_MEMBER_LIMIT = int(getattr(settings, 'PRIVATE_ROOM_MEMBER_LIMIT', 10))
+
+
+def _uploads_used_today(chat_group, user) -> int:
+    """Count uploads sent today by a user in a room.
+
+    This enforces a daily cap (instead of lifetime cap) for private room uploads.
+    """
+    try:
+        today = timezone.localdate()
+    except Exception:
+        today = timezone.now().date()
+    return (
+        chat_group.chat_messages
+        .filter(author=user, created__date=today)
+        .exclude(file__isnull=True)
+        .exclude(file='')
+        .count()
+    )
 
 
 def _attach_reaction_pills(messages, user):
@@ -175,15 +210,15 @@ def _build_groupchat_sections(groupchats):
     sections_spec = [
         (
             '✨ Social & Fun',
-            ['Backbenchers', 'Vibe Check', 'Nalayak Gang', 'Girls Group', 'Late Night Owls'],
+            ['Backbenchers', 'Vibe Check', 'Meme Central', 'Late Night Owls'],
         ),
         (
             '🤝 Professional & Indian Vibes',
-            ['Indian-Boys', 'The Nexus', 'Growth Mindset'],
+            ['Job & Internships', 'Growth Mindset'],
         ),
         (
             '🚀 Tech & Coding',
-            ['Code & Coffee', 'The Syntax Squad', 'Bug Hunters', 'FullStack Circle'],
+            ['Code & Coffee', 'Bug Hunters', 'FullStack Circle', 'Showcase Your Work'],
         ),
     ]
 
@@ -313,6 +348,17 @@ def chat_view(request, chatroom_name='public-chat'):
             )
         except Exception:
             other_last_read_id = 0
+
+    verified_user_ids = set()
+    try:
+        author_ids = {getattr(m, 'author_id', None) for m in (chat_messages or [])}
+        author_ids = {x for x in author_ids if x}
+        author_ids.add(getattr(request.user, 'id', None))
+        if other_user:
+            author_ids.add(getattr(other_user, 'id', None))
+        verified_user_ids = get_verified_user_ids(author_ids)
+    except Exception:
+        verified_user_ids = set()
             
     if chat_group.groupchat_name:
         if request.user not in chat_group.members.all():
@@ -333,16 +379,13 @@ def chat_view(request, chatroom_name='public-chat'):
                 else:
                     chat_group.members.add(request.user)
 
+    links_allowed = room_allows_links(chat_group)
+    uploads_allowed = room_allows_uploads(chat_group)
+
     uploads_used = 0
     uploads_remaining = None
-    if getattr(chat_group, 'is_private', False) and getattr(chat_group, 'is_code_room', False):
-        uploads_used = (
-            chat_group.chat_messages
-            .filter(author=request.user)
-            .exclude(file__isnull=True)
-            .exclude(file='')
-            .count()
-        )
+    if uploads_allowed:
+        uploads_used = _uploads_used_today(chat_group, request.user)
         uploads_remaining = max(0, CHAT_UPLOAD_LIMIT_PER_ROOM - uploads_used)
     
     if request.htmx:
@@ -367,7 +410,7 @@ def chat_view(request, chatroom_name='public-chat'):
         # File upload (optional caption) via the same Send button.
         # The template shows the file picker only for private code rooms, but we enforce it here too.
         if request.FILES and 'file' in request.FILES:
-            if not getattr(chat_group, 'is_private', False) or not getattr(chat_group, 'is_code_room', False):
+            if not uploads_allowed:
                 raise Http404()
             if request.user not in chat_group.members.all():
                 raise Http404()
@@ -402,16 +445,10 @@ def chat_view(request, chatroom_name='public-chat'):
             if not (content_type.startswith('image/') or content_type.startswith('video/')):
                 return HttpResponse('<div class="text-xs text-red-400">Only photos/videos are allowed.</div>', status=400)
 
-            uploads_used = (
-                chat_group.chat_messages
-                .filter(author=request.user)
-                .exclude(file__isnull=True)
-                .exclude(file='')
-                .count()
-            )
+            uploads_used = _uploads_used_today(chat_group, request.user)
             if uploads_used >= CHAT_UPLOAD_LIMIT_PER_ROOM:
                 return HttpResponse(
-                    f'<div class="text-xs text-red-400">Upload limit reached ({CHAT_UPLOAD_LIMIT_PER_ROOM}/{CHAT_UPLOAD_LIMIT_PER_ROOM}).</div>',
+                    f'<div class="text-xs text-red-400">Daily upload limit reached ({CHAT_UPLOAD_LIMIT_PER_ROOM}/{CHAT_UPLOAD_LIMIT_PER_ROOM}).</div>',
                     status=400,
                 )
 
@@ -421,6 +458,18 @@ def chat_view(request, chatroom_name='public-chat'):
                 author=request.user,
                 group=chat_group,
             )
+
+            # Retention: keep only the newest messages per room (best-effort)
+            try:
+                from a_rtchat.retention import trim_chat_group_messages
+
+                trim_chat_group_messages(chat_group_id=chat_group.id, keep_last=int(getattr(settings, 'CHAT_MAX_MESSAGES_PER_ROOM', 12000)))
+            except Exception:
+                pass
+
+            # Recompute counters after saving the upload so the UI can update without refresh.
+            uploads_used = _uploads_used_today(chat_group, request.user)
+            uploads_remaining = max(0, CHAT_UPLOAD_LIMIT_PER_ROOM - uploads_used)
 
             channel_layer = get_channel_layer()
 
@@ -439,11 +488,20 @@ def chat_view(request, chatroom_name='public-chat'):
                         if member_ids is not None and u.id not in member_ids:
                             continue
 
+                        # DND: don't send notifications/push/calls to this user.
+                        try:
+                            from a_rtchat.notifications import should_send_realtime_notification
+
+                            if not should_send_realtime_notification(user_id=u.id):
+                                continue
+                        except Exception:
+                            pass
+
                         # Persist only if user is not online in this chat.
                         try:
                             from a_rtchat.notifications import should_persist_notification
 
-                            if should_persist_notification(user_id=u.id, chatroom_name=chat_group.group_name):
+                            if should_persist_notification(user_id=u.id, chatroom_name=chat_group.group_name) or bool(getattr(chat_group, 'is_private', False)):
                                 Notification.objects.create(
                                     user=u,
                                     from_user=request.user,
@@ -471,12 +529,15 @@ def chat_view(request, chatroom_name='public-chat'):
                         try:
                             from a_users.tasks import send_mention_push_task
 
-                            send_mention_push_task.delay(
-                                u.id,
-                                from_username=request.user.username,
-                                chatroom_name=chat_group.group_name,
-                                preview=preview,
-                            )
+                            # If Celery broker isn't configured (common in local/dev),
+                            # don't enqueue tasks in-request (can block for seconds).
+                            if _celery_broker_configured():
+                                send_mention_push_task.delay(
+                                    u.id,
+                                    from_username=request.user.username,
+                                    chatroom_name=chat_group.group_name,
+                                    preview=preview,
+                                )
                         except Exception:
                             pass
             except Exception:
@@ -496,16 +557,26 @@ def chat_view(request, chatroom_name='public-chat'):
             )
 
             _attach_reaction_pills([message], request.user)
+            attach_auto_badges([message], chat_group)
+            verified_user_ids = get_verified_user_ids([getattr(request.user, 'id', None)])
             html = render(request, 'a_rtchat/chat_message.html', {
                 'message': message,
                 'user': request.user,
                 'chat_group': chat_group,
                 'reaction_emojis': CHAT_REACTION_EMOJIS,
                 'other_last_read_id': other_last_read_id,
+                'verified_user_ids': verified_user_ids,
             }).content.decode('utf-8')
 
             resp = HttpResponse(html, status=200)
-            resp.headers['HX-Trigger-After-Swap'] = 'chatFileUploaded'
+            resp.headers['HX-Trigger-After-Swap'] = json.dumps({
+                'chatFileUploaded': True,
+                'uploadCountUpdated': {
+                    'used': uploads_used,
+                    'limit': CHAT_UPLOAD_LIMIT_PER_ROOM,
+                    'remaining': uploads_remaining,
+                },
+            })
             return resp
 
         # Room-wide flood protection (applies to everyone in the room).
@@ -529,6 +600,13 @@ def chat_view(request, chatroom_name='public-chat'):
 
         # Duplicate message detection (same message spam).
         raw_body = (request.POST.get('body') or '').strip()
+
+        # Links are only allowed in private chats.
+        if raw_body and contains_link(raw_body) and not links_allowed:
+            resp = HttpResponse('', status=400)
+            resp.headers['HX-Trigger'] = json.dumps({'linksNotAllowed': {'reason': 'Links are only allowed in private chats.'}})
+            return resp
+
         if raw_body:
             is_dup, dup_retry = is_duplicate_message(
                 chat_group.group_name,
@@ -758,6 +836,25 @@ def chat_view(request, chatroom_name='public-chat'):
                         message.reply_to = reply_to
             message.save()
 
+            # Retention: keep only the newest messages per room (best-effort)
+            try:
+                from a_rtchat.retention import trim_chat_group_messages
+
+                trim_chat_group_messages(
+                    chat_group_id=chat_group.id,
+                    keep_last=int(getattr(settings, 'CHAT_MAX_MESSAGES_PER_ROOM', 12000)),
+                )
+            except Exception:
+                pass
+
+            # Public chat bot (Natasha): reply occasionally, async.
+            try:
+                if (getattr(chat_group, 'group_name', '') == 'public-chat'
+                        and getattr(request.user, 'username', '') != NATASHA_USERNAME):
+                    trigger_natasha_reply_after_commit(chat_group.id, message.id)
+            except Exception:
+                pass
+
             channel_layer = get_channel_layer()
 
             # Mention notifications (best-effort)
@@ -776,11 +873,20 @@ def chat_view(request, chatroom_name='public-chat'):
                         if member_ids is not None and u.id not in member_ids:
                             continue
 
+                        # DND: don't send notifications/push/calls to this user.
+                        try:
+                            from a_rtchat.notifications import should_send_realtime_notification
+
+                            if not should_send_realtime_notification(user_id=u.id):
+                                continue
+                        except Exception:
+                            pass
+
                         # Persist notification only if user is offline (not connected in any chat WS).
                         try:
                             from a_rtchat.notifications import should_persist_notification
 
-                            if should_persist_notification(user_id=u.id, chatroom_name=chat_group.group_name):
+                            if should_persist_notification(user_id=u.id, chatroom_name=chat_group.group_name) or bool(getattr(chat_group, 'is_private', False)):
                                 Notification.objects.create(
                                     user=u,
                                     from_user=request.user,
@@ -808,12 +914,13 @@ def chat_view(request, chatroom_name='public-chat'):
                         try:
                             from a_users.tasks import send_mention_push_task
 
-                            send_mention_push_task.delay(
-                                u.id,
-                                from_username=request.user.username,
-                                chatroom_name=chat_group.group_name,
-                                preview=preview,
-                            )
+                            if _celery_broker_configured():
+                                send_mention_push_task.delay(
+                                    u.id,
+                                    from_username=request.user.username,
+                                    chatroom_name=chat_group.group_name,
+                                    preview=preview,
+                                )
                         except Exception:
                             pass
             except Exception:
@@ -826,10 +933,18 @@ def chat_view(request, chatroom_name='public-chat'):
                     target_id = int(reply_to.author_id)
                     preview = (raw_body or '')[:140]
 
+                    allow_realtime = True
+                    try:
+                        from a_rtchat.notifications import should_send_realtime_notification
+
+                        allow_realtime = bool(should_send_realtime_notification(user_id=target_id))
+                    except Exception:
+                        allow_realtime = True
+
                     try:
                         from a_rtchat.notifications import should_persist_notification
 
-                        if should_persist_notification(user_id=target_id, chatroom_name=chat_group.group_name):
+                        if should_persist_notification(user_id=target_id, chatroom_name=chat_group.group_name) or bool(getattr(chat_group, 'is_private', False)):
                             Notification.objects.create(
                                 user_id=target_id,
                                 from_user=request.user,
@@ -842,16 +957,17 @@ def chat_view(request, chatroom_name='public-chat'):
                     except Exception:
                         pass
 
-                    async_to_sync(channel_layer.group_send)(
-                        f"notify_user_{target_id}",
-                        {
-                            'type': 'reply_notify_handler',
-                            'from_username': request.user.username,
-                            'chatroom_name': chat_group.group_name,
-                            'message_id': message.id,
-                            'preview': preview,
-                        },
-                    )
+                    if allow_realtime:
+                        async_to_sync(channel_layer.group_send)(
+                            f"notify_user_{target_id}",
+                            {
+                                'type': 'reply_notify_handler',
+                                'from_username': request.user.username,
+                                'chatroom_name': chat_group.group_name,
+                                'message_id': message.id,
+                                'preview': preview,
+                            },
+                        )
             except Exception:
                 pass
 
@@ -877,14 +993,31 @@ def chat_view(request, chatroom_name='public-chat'):
 
             # Broadcast to websocket listeners (including sender) so the message appears instantly
             channel_layer = get_channel_layer()
-            event = {
-                'type': 'message_handler',
-                'message_id': message.id,
-            }
-            async_to_sync(channel_layer.group_send)(chatroom_channel_group_name(chat_group), event)
 
-            # HTMX request: no HTML swap needed; websocket will append the rendered message.
-            return HttpResponse('', status=204)
+            # Broadcast to others; sender will render via HTMX response.
+            async_to_sync(channel_layer.group_send)(
+                chatroom_channel_group_name(chat_group),
+                {
+                    'type': 'message_handler',
+                    'message_id': message.id,
+                    'skip_sender': True,
+                    'author_id': request.user.id,
+                },
+            )
+
+            _attach_reaction_pills([message], request.user)
+            attach_auto_badges([message], chat_group)
+            verified_user_ids = get_verified_user_ids([getattr(request.user, 'id', None)])
+            html = render(request, 'a_rtchat/chat_message.html', {
+                'message': message,
+                'user': request.user,
+                'chat_group': chat_group,
+                'reaction_emojis': CHAT_REACTION_EMOJIS,
+                'other_last_read_id': other_last_read_id,
+                'verified_user_ids': verified_user_ids,
+            }).content.decode('utf-8')
+
+            return HttpResponse(html, status=200)
 
         # Invalid (e.g., empty/whitespace) message -> do nothing
         return HttpResponse('', status=204)
@@ -911,6 +1044,7 @@ def chat_view(request, chatroom_name='public-chat'):
         'other_last_read_id': other_last_read_id,
         'chatroom_name' : chatroom_name,
         'chat_group' : chat_group,
+        'verified_user_ids': verified_user_ids,
         'chat_blocked': chat_blocked,
         'chat_muted_seconds': chat_muted_seconds,
         'needs_email_verification_for_chat': needs_email_verification_for_chat,
@@ -925,10 +1059,206 @@ def chat_view(request, chatroom_name='public-chat'):
         'uploads_used': uploads_used,
         'uploads_remaining': uploads_remaining,
         'upload_limit': CHAT_UPLOAD_LIMIT_PER_ROOM,
+        'links_allowed': links_allowed,
+        'uploads_allowed': uploads_allowed,
         'reaction_emojis': CHAT_REACTION_EMOJIS,
+    }
+
+    # Dynamic badges under username (computed per author in the loaded message set)
+    try:
+        attach_auto_badges(chat_messages, chat_group)
+    except Exception:
+        pass
+
+    # Embed chat JS config directly in the page so chat features work even if
+    # external CDNs fail or the separate /chat/config fetch is blocked.
+    try:
+        me_profile = getattr(request.user, 'profile', None)
+    except Exception:
+        me_profile = None
+    try:
+        other_profile = getattr(other_user, 'profile', None) if other_user else None
+    except Exception:
+        other_profile = None
+
+    def _safe_avatar(profile_obj):
+        try:
+            return getattr(profile_obj, 'avatar', '') if profile_obj else ''
+        except Exception:
+            return ''
+
+    try:
+        me_display = (getattr(me_profile, 'name', None) or request.user.username)
+    except Exception:
+        me_display = request.user.username
+
+    other_display = ''
+    if other_user:
+        try:
+            other_display = (getattr(other_profile, 'name', None) or other_user.username)
+        except Exception:
+            other_display = other_user.username
+
+    context['chat_config'] = {
+        'chatroomName': chatroom_name,
+        'currentUserId': getattr(request.user, 'id', 0) or 0,
+        'currentUsername': request.user.username,
+        'otherLastReadId': int(other_last_read_id or 0),
+        'pollUrl': reverse('chat-poll', args=[chatroom_name]),
+        'inviteUrl': reverse('chat-call-invite', args=[chatroom_name]),
+        'tokenUrl': reverse('agora-token', args=[chatroom_name]),
+        'presenceUrl': reverse('chat-call-presence', args=[chatroom_name]),
+        'callEventUrl': reverse('chat-call-event', args=[chatroom_name]),
+        'messageEditUrlTemplate': reverse('message-edit', args=[0]),
+        'messageDeleteUrlTemplate': reverse('message-delete', args=[0]),
+        'messageReactUrlTemplate': reverse('message-react', args=[0]),
+        'mentionSearchUrl': reverse('mention-search'),
+        'chatMutedSeconds': int(chat_muted_seconds or 0),
+        'otherUsername': other_user.username if other_user else '',
+        'meDisplayName': me_display,
+        'meAvatarUrl': _safe_avatar(me_profile),
+        'otherDisplayName': other_display,
+        'otherAvatarUrl': _safe_avatar(other_profile),
+        'linksAllowed': bool(links_allowed),
+        'chatBlocked': bool(chat_blocked),
     }
     
     return render(request, 'a_rtchat/chat.html', context)
+
+
+@login_required
+def chat_config_view(request, chatroom_name):
+    """Return JSON config for the chat UI (consumed by static JS)."""
+    # Only auto-create the global public chat. All other rooms must already exist.
+    if chatroom_name == 'public-chat':
+        chat_group, _created = ChatGroup.objects.get_or_create(group_name=chatroom_name)
+    else:
+        try:
+            chat_group = ChatGroup.objects.get(group_name=chatroom_name)
+        except ChatGroup.DoesNotExist:
+            return JsonResponse({'error': 'chatroom_closed'}, status=404)
+
+    chat_blocked = _is_chat_blocked(request.user)
+    chat_muted_seconds = get_muted_seconds(getattr(request.user, 'id', 0))
+
+    other_user = None
+    if getattr(chat_group, 'is_private', False):
+        if chat_blocked:
+            return JsonResponse({'error': 'blocked'}, status=403)
+        if request.user not in chat_group.members.all():
+            raise Http404()
+        for member in chat_group.members.all():
+            if member != request.user:
+                other_user = member
+                break
+
+    other_last_read_id = 0
+    if other_user and getattr(chat_group, 'is_private', False):
+        try:
+            from .models import ChatReadState
+
+            other_last_read_id = int(
+                ChatReadState.objects.filter(user=other_user, group=chat_group)
+                .values_list('last_read_message_id', flat=True)
+                .first()
+                or 0
+            )
+        except Exception:
+            other_last_read_id = 0
+
+    # Group chat auto-join behavior (match chat_view)
+    if getattr(chat_group, 'groupchat_name', None):
+        if request.user not in chat_group.members.all() and not chat_blocked:
+            email_verification = str(getattr(settings, 'ACCOUNT_EMAIL_VERIFICATION', 'optional')).lower()
+            if email_verification == 'mandatory':
+                email_qs = request.user.emailaddress_set.all()
+                if email_qs.filter(verified=True).exists():
+                    chat_group.members.add(request.user)
+                else:
+                    return JsonResponse({'error': 'verify_email_required'}, status=403)
+            else:
+                chat_group.members.add(request.user)
+
+    links_allowed = room_allows_links(chat_group)
+
+    def _safe_profile(user):
+        try:
+            return getattr(user, 'profile', None)
+        except Exception:
+            return None
+
+    me_profile = _safe_profile(request.user)
+    other_profile = _safe_profile(other_user) if other_user else None
+
+    me_display = (getattr(me_profile, 'name', None) or request.user.username)
+    other_display = ''
+    if other_user:
+        other_display = (getattr(other_profile, 'name', None) or other_user.username)
+
+    def _safe_avatar(profile_obj):
+        try:
+            return getattr(profile_obj, 'avatar', '') if profile_obj else ''
+        except Exception:
+            return ''
+
+    data = {
+        'chatroomName': chatroom_name,
+        'currentUserId': getattr(request.user, 'id', 0) or 0,
+        'currentUsername': request.user.username,
+        'otherLastReadId': other_last_read_id,
+        'pollUrl': reverse('chat-poll', args=[chatroom_name]),
+        'inviteUrl': reverse('chat-call-invite', args=[chatroom_name]),
+        'tokenUrl': reverse('agora-token', args=[chatroom_name]),
+        'presenceUrl': reverse('chat-call-presence', args=[chatroom_name]),
+        'callEventUrl': reverse('chat-call-event', args=[chatroom_name]),
+        'messageEditUrlTemplate': reverse('message-edit', args=[0]),
+        'messageDeleteUrlTemplate': reverse('message-delete', args=[0]),
+        'messageReactUrlTemplate': reverse('message-react', args=[0]),
+        'mentionSearchUrl': reverse('mention-search'),
+        'chatMutedSeconds': int(chat_muted_seconds or 0),
+        'otherUsername': other_user.username if other_user else '',
+        'meDisplayName': me_display,
+        'meAvatarUrl': _safe_avatar(me_profile),
+        'otherDisplayName': other_display,
+        'otherAvatarUrl': _safe_avatar(other_profile),
+        'linksAllowed': bool(links_allowed),
+    }
+    return JsonResponse(data)
+
+
+@login_required
+def call_config_view(request, chatroom_name):
+    """Return JSON config for the call UI (consumed by static JS)."""
+    chat_group = get_object_or_404(ChatGroup, group_name=chatroom_name)
+
+    if _is_chat_blocked(request.user):
+        raise Http404()
+    if not getattr(chat_group, 'is_private', False):
+        raise Http404()
+    if request.user not in chat_group.members.all():
+        raise Http404()
+
+    call_type = (request.GET.get('type') or 'voice').lower()
+    if call_type not in {'voice', 'video'}:
+        call_type = 'voice'
+
+    role = (request.GET.get('role') or 'caller').lower()
+    if role not in {'caller', 'callee'}:
+        role = 'caller'
+
+    member_usernames = list(chat_group.members.values_list('username', flat=True))
+
+    return JsonResponse({
+        'callType': call_type,
+        'channel': chatroom_name,
+        'callRole': role,
+        'currentUsername': request.user.username,
+        'tokenUrl': reverse('agora-token', args=[chatroom_name]),
+        'presenceUrl': reverse('chat-call-presence', args=[chatroom_name]),
+        'callEventUrl': reverse('chat-call-event', args=[chatroom_name]),
+        'backUrl': reverse('chatroom', args=[chatroom_name]),
+        'memberUsernames': member_usernames,
+    })
 
 
 @login_required
@@ -963,7 +1293,7 @@ def create_private_room(request):
     )
     room.members.add(request.user)
     messages.success(request, f'Private room created. Share code: {room.room_code}')
-    return redirect('chatroom', room.group_name)
+    return redirect(f"{reverse('chatroom', args=[room.group_name])}?created=1")
 
 
 @login_required
@@ -995,7 +1325,23 @@ def join_private_room_by_code(request):
         messages.error(request, 'Room code is invalid')
         return redirect('home')
 
-    room.members.add(request.user)
+    # Hard cap: private code rooms can have at most N members.
+    # If exceeded, show a popup/toast via Django messages.
+    with transaction.atomic():
+        locked_room = ChatGroup.objects.select_for_update().filter(pk=room.pk).first()
+        if not locked_room:
+            messages.error(request, 'Room code is invalid')
+            return redirect('home')
+
+        if locked_room.members.filter(pk=request.user.pk).exists():
+            return redirect('chatroom', locked_room.group_name)
+
+        if locked_room.members.count() >= PRIVATE_ROOM_MEMBER_LIMIT:
+            messages.error(request, 'User limit reached')
+            return redirect('home')
+
+        locked_room.members.add(request.user)
+
     return redirect('chatroom', room.group_name)
 
 @login_required
@@ -1139,8 +1485,8 @@ def chat_file_upload(request, chatroom_name):
     if request.method != 'POST':
         raise Http404()
 
-    # Uploads allowed ONLY in private code rooms.
-    if not getattr(chat_group, 'is_private', False) or not getattr(chat_group, 'is_code_room', False):
+    # Uploads allowed ONLY in private code rooms (plus Showcase exception).
+    if not room_allows_uploads(chat_group):
         raise Http404()
 
     if request.user not in chat_group.members.all():
@@ -1179,16 +1525,10 @@ def chat_file_upload(request, chatroom_name):
         )
 
     # Enforce per-user per-room upload limit
-    uploads_used = (
-        chat_group.chat_messages
-        .filter(author=request.user)
-        .exclude(file__isnull=True)
-        .exclude(file='')
-        .count()
-    )
+    uploads_used = _uploads_used_today(chat_group, request.user)
     if uploads_used >= CHAT_UPLOAD_LIMIT_PER_ROOM:
         return HttpResponse(
-            f'<div class="text-xs text-red-400">Upload limit reached ({CHAT_UPLOAD_LIMIT_PER_ROOM}/{CHAT_UPLOAD_LIMIT_PER_ROOM}).</div>',
+            f'<div class="text-xs text-red-400">Daily upload limit reached ({CHAT_UPLOAD_LIMIT_PER_ROOM}/{CHAT_UPLOAD_LIMIT_PER_ROOM}).</div>',
             status=400,
         )
 
@@ -1198,6 +1538,14 @@ def chat_file_upload(request, chatroom_name):
         author=request.user,
         group=chat_group,
     )
+
+    # Retention: keep only the newest messages per room (best-effort)
+    try:
+        from a_rtchat.retention import trim_chat_group_messages
+
+        trim_chat_group_messages(chat_group_id=chat_group.id, keep_last=int(getattr(settings, 'CHAT_MAX_MESSAGES_PER_ROOM', 12000)))
+    except Exception:
+        pass
 
     channel_layer = get_channel_layer()
     event = {
@@ -1213,12 +1561,14 @@ def chat_file_upload(request, chatroom_name):
     # even if websockets are unavailable.
     if is_htmx:
         _attach_reaction_pills([message], request.user)
+        verified_user_ids = get_verified_user_ids([getattr(request.user, 'id', None)])
         html = render(request, 'a_rtchat/chat_message.html', {
             'message': message,
             'user': request.user,
             'chat_group': chat_group,
             'reaction_emojis': CHAT_REACTION_EMOJIS,
             'other_last_read_id': 0,
+            'verified_user_ids': verified_user_ids,
         }).content.decode('utf-8')
         response = HttpResponse(html, status=200)
         # Fire after swap so client-side reset doesn't interfere with the DOM insertion.
@@ -1291,6 +1641,15 @@ def chat_poll_view(request, chatroom_name):
 
     _attach_reaction_pills(new_messages, request.user)
 
+    verified_user_ids = set()
+    try:
+        author_ids = {getattr(m, 'author_id', None) for m in (new_messages or [])}
+        author_ids = {x for x in author_ids if x}
+        author_ids.add(getattr(request.user, 'id', None))
+        verified_user_ids = get_verified_user_ids(author_ids)
+    except Exception:
+        verified_user_ids = set()
+
     # Render a batch of messages using the same bubble template
     parts = []
     for message in new_messages:
@@ -1299,6 +1658,7 @@ def chat_poll_view(request, chatroom_name):
             'user': request.user,
             'chat_group': chat_group,
             'reaction_emojis': CHAT_REACTION_EMOJIS,
+            'verified_user_ids': verified_user_ids,
         }).content.decode('utf-8'))
 
     last_id = new_messages[-1].id
@@ -1338,6 +1698,10 @@ def message_edit_view(request, message_id: int):
     body = (request.POST.get('body') or '').strip()
     if not body:
         return JsonResponse({'error': 'Message cannot be empty'}, status=400)
+
+    # Links are only allowed in private chats.
+    if contains_link(body) and not room_allows_links(chat_group):
+        return JsonResponse({'error': 'Links are only allowed in private chats.'}, status=400)
 
     if body != (message.body or ''):
         message.body = body
@@ -1515,6 +1879,20 @@ def admin_toggle_user_block_view(request, user_id: int):
     profile.chat_blocked = not bool(profile.chat_blocked)
     profile.save(update_fields=['chat_blocked'])
 
+    # Realtime: notify the user (all open tabs) that their chat permissions changed.
+    try:
+        channel_layer = get_channel_layer()
+        async_to_sync(channel_layer.group_send)(
+            f"notify_user_{target.id}",
+            {
+                'type': 'chat_block_status_notify_handler',
+                'blocked': bool(profile.chat_blocked),
+                'by_username': getattr(request.user, 'username', '') or '',
+            },
+        )
+    except Exception:
+        pass
+
     if profile.chat_blocked:
         messages.success(request, f'Blocked {target.username} from chatting')
     else:
@@ -1537,6 +1915,47 @@ def admin_toggle_user_block_view(request, user_id: int):
         return redirect(referer)
 
     return redirect('admin-users')
+
+
+@login_required
+def admin_reports_view(request):
+    if not request.user.is_staff:
+        raise Http404()
+
+    status = (request.GET.get('status') or '').strip().lower()
+    qs = UserReport.objects.select_related('reporter', 'reported_user', 'handled_by')
+    if status in {UserReport.STATUS_OPEN, UserReport.STATUS_RESOLVED, UserReport.STATUS_DISMISSED}:
+        qs = qs.filter(status=status)
+
+    reports = qs[:200]
+    return render(request, 'a_rtchat/admin_reports.html', {
+        'reports': reports,
+        'status': status,
+    })
+
+
+@login_required
+def admin_report_update_status_view(request, report_id: int):
+    if request.method != 'POST':
+        raise Http404()
+    if not request.user.is_staff:
+        raise Http404()
+
+    report = get_object_or_404(UserReport, pk=report_id)
+    new_status = (request.POST.get('status') or '').strip().lower()
+    if new_status not in {UserReport.STATUS_OPEN, UserReport.STATUS_RESOLVED, UserReport.STATUS_DISMISSED}:
+        messages.error(request, 'Invalid status')
+        return redirect('admin-reports')
+
+    report.status = new_status
+    report.handled_by = request.user
+    report.handled_at = timezone.now()
+    note = (request.POST.get('note') or '').strip()
+    if note:
+        report.resolution_note = note
+    report.save(update_fields=['status', 'handled_by', 'handled_at', 'resolution_note'])
+    messages.success(request, f'Updated report #{report.id}')
+    return redirect('admin-reports')
 
 
 @login_required
@@ -1657,7 +2076,15 @@ def call_invite_view(request, chatroom_name):
     call_url = reverse('chat-call', kwargs={'chatroom_name': chat_group.group_name}) + f"?type={call_type}&role=callee"
     call_event_url = reverse('chat-call-event', kwargs={'chatroom_name': chat_group.group_name})
     for member in chat_group.members.exclude(id=request.user.id):
-                        async_to_sync(channel_layer.group_send)(
+        try:
+            from a_rtchat.notifications import should_send_realtime_notification
+
+            if not should_send_realtime_notification(user_id=member.id):
+                continue
+        except Exception:
+            pass
+
+        async_to_sync(channel_layer.group_send)(
             f"notify_user_{member.id}",
             {
                 'type': 'call_invite_notify_handler',
@@ -1783,6 +2210,14 @@ def call_event_view(request, chatroom_name):
         group=chat_group,
     )
 
+    # Retention: keep only the newest messages per room (best-effort)
+    try:
+        from a_rtchat.retention import trim_chat_group_messages
+
+        trim_chat_group_messages(chat_group_id=chat_group.id, keep_last=int(getattr(settings, 'CHAT_MAX_MESSAGES_PER_ROOM', 12000)))
+    except Exception:
+        pass
+
     # Update call state
     if action == 'start':
         # Keep call state for a while; end will delete it.
@@ -1808,6 +2243,26 @@ def call_event_view(request, chatroom_name):
             'call_type': call_type,
         })
 
+        for member in chat_group.members.exclude(id=request.user.id):
+            try:
+                from a_rtchat.notifications import should_send_realtime_notification
+
+                if not should_send_realtime_notification(user_id=member.id):
+                    continue
+            except Exception:
+                pass
+
+            async_to_sync(channel_layer.group_send)(
+                f"notify_user_{member.id}",
+                {
+                    'type': 'call_control_notify_handler',
+                    'action': 'end',
+                    'from_username': request.user.username,
+                    'call_type': call_type,
+                    'chatroom_name': chat_group.group_name,
+                },
+            )
+
     if action == 'decline':
         async_to_sync(channel_layer.group_send)(chatroom_channel_group_name(chat_group), {
             'type': 'call_control_handler',
@@ -1816,4 +2271,47 @@ def call_event_view(request, chatroom_name):
             'call_type': call_type,
         })
 
+        for member in chat_group.members.exclude(id=request.user.id):
+            async_to_sync(channel_layer.group_send)(
+                f"notify_user_{member.id}",
+                {
+                    'type': 'call_control_notify_handler',
+                    'action': 'decline',
+                    'from_username': request.user.username,
+                    'call_type': call_type,
+                    'chatroom_name': chat_group.group_name,
+                },
+            )
+
     return JsonResponse({'ok': True})
+
+
+@login_required
+def push_config(request):
+    """Return Firebase web-push public config for the current session.
+
+    This is not a secret, but keeping it out of the base HTML avoids showing it
+    in page source/inspect for every page.
+    """
+    if request.method != 'GET':
+        raise Http404()
+
+    if not getattr(settings, 'FIREBASE_ENABLED', False):
+        resp = JsonResponse({'enabled': False}, status=404)
+        resp['Cache-Control'] = 'no-store'
+        return resp
+
+    vapid_key = (getattr(settings, 'FIREBASE_VAPID_PUBLIC_KEY', '') or '').strip()
+    raw_cfg = (getattr(settings, 'FIREBASE_CONFIG_JSON', '{}') or '{}').strip()
+    try:
+        cfg = json.loads(raw_cfg) if raw_cfg else {}
+    except Exception:
+        cfg = {}
+
+    resp = JsonResponse({
+        'enabled': True,
+        'vapidKey': vapid_key,
+        'config': cfg,
+    })
+    resp['Cache-Control'] = 'no-store'
+    return resp
