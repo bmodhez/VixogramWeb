@@ -3,18 +3,74 @@ Trigger placed beside the message bubble.
 For UX: click '+' opens the emoji bar.
 {% endcomment %}
 
-<div class="relative">
+<div data-msg-actions class="relative flex items-center gap-1 transition duration-150 ease-out opacity-0 pointer-events-none sm:group-hover:opacity-100 sm:group-hover:pointer-events-auto">
     <button
         type="button"
-        class="h-8 w-8 inline-flex items-center justify-center rounded-full bg-gray-800/40 text-gray-300 hover:text-white transition duration-150 ease-out hover:bg-gray-800/70 hover:scale-105 active:scale-95
-               opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:pointer-events-none sm:group-hover:pointer-events-auto"
+        class="h-8 w-8 inline-flex items-center justify-center rounded-full bg-gray-800/40 text-gray-300 hover:text-white transition duration-150 ease-out hover:bg-gray-800/70 hover:scale-105 active:scale-95"
+        aria-label="Reply"
+        title="Reply"
+        data-reply-button
+        data-reply-to-id="{{ message.id }}"
+        data-reply-author="{{ message.author.profile.name|default:message.author.username|escape }}"
+        data-reply-preview="{{ message.body|default:message.file_caption|default:message.filename|default:''|escape }}">
+        <span class="text-base leading-none">↩</span>
+    </button>
+
+    <button
+        type="button"
+        class="h-8 w-8 inline-flex items-center justify-center rounded-full bg-gray-800/40 text-gray-300 hover:text-white transition duration-150 ease-out hover:bg-gray-800/70 hover:scale-105 active:scale-95"
         aria-label="Add reaction"
+        title="Add reaction"
         data-reaction-toggle
         data-message-id="{{ message.id }}">
         <span class="text-base leading-none">+</span>
     </button>
 
-    <div class="hidden absolute bottom-full mb-2 right-0 items-center gap-1 rounded-full bg-gray-900/95 px-2 py-1 shadow-lg shadow-black/20 ring-1 ring-white/10"
+    {% if message.author == user or user.is_staff %}
+        <div class="relative">
+            <button
+                type="button"
+                class="h-8 w-8 inline-flex items-center justify-center rounded-full bg-gray-800/40 text-gray-300 hover:text-white transition duration-150 ease-out hover:bg-gray-800/70 hover:scale-105 active:scale-95"
+                aria-label="Message actions"
+                title="Actions"
+                aria-haspopup="menu"
+                aria-expanded="false"
+                data-message-menu-toggle>
+                <span class="text-base leading-none">⋮</span>
+            </button>
+
+            <div class="hidden absolute bottom-full mb-2 right-0 min-w-28 rounded-xl border border-gray-800 bg-gray-900/95 shadow-lg shadow-black/20 overflow-hidden z-50" data-message-menu role="menu">
+                {% if message.author == user and message.body and message.body|slice:":6" != "[CALL]" and not message.file %}
+                    <button type="button"
+                        data-edit-message
+                        data-message-id="{{ message.id }}"
+                        data-message-body="{{ message.body|default:''|escape }}"
+                        class="w-full text-left px-3 py-2 text-xs text-gray-200 hover:bg-gray-800/60">
+                        Edit
+                    </button>
+                {% endif %}
+                <button type="button"
+                    data-delete-message
+                    data-message-id="{{ message.id }}"
+                    class="w-full text-left px-3 py-2 text-xs text-gray-200 hover:bg-gray-800/60">
+                    Delete
+                </button>
+
+                {% if user.is_staff and message.author != user and not message.author.is_superuser %}
+                    <form method="post" action="{% url 'admin-user-toggle-block' message.author.id %}">
+                        {% csrf_token %}
+                        <input type="hidden" name="next" value="{% url 'chatroom' chat_group.group_name %}" />
+                        <button type="submit"
+                            class="w-full text-left px-3 py-2 text-xs text-gray-200 hover:bg-gray-800/60">
+                            {% if message.author.profile.chat_blocked %}Unblock user{% else %}Block user{% endif %}
+                        </button>
+                    </form>
+                {% endif %}
+            </div>
+        </div>
+    {% endif %}
+
+    <div class="hidden absolute bottom-full mb-2 right-0 flex items-center gap-1 rounded-full bg-gray-900/95 px-2 py-1 shadow-lg shadow-black/20 ring-1 ring-white/10"
          data-reaction-picker
          data-message-id="{{ message.id }}">
         {% for emoji in reaction_emojis %}
@@ -24,7 +80,7 @@ For UX: click '+' opens the emoji bar.
                 data-react-emoji
                 data-message-id="{{ message.id }}"
                 data-emoji="{{ emoji }}">
-                <span class="text-lg leading-none">{{ emoji }}</span>
+                <span class="text-lg leading-tight">{{ emoji }}</span>
             </button>
         {% endfor %}
     </div>

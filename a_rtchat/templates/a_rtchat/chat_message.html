@@ -11,84 +11,33 @@
         </div>
     </div>
 {% else %}
-<div id="msg-{{ message.id }}" data-message-id="{{ message.id }}" class="vixo-msg group relative w-full flex {% if message.author == user %}justify-end{% else %}justify-start{% endif %}{% if extra_classes %} {{ extra_classes }}{% endif %}">
+<div id="msg-{{ message.id }}" data-message-id="{{ message.id }}" data-author-id="{{ message.author_id }}" class="vixo-msg group relative w-full flex {% if message.author == user %}justify-end{% else %}justify-start{% endif %}{% if extra_classes %} {{ extra_classes }}{% endif %}">
     <div class="flex flex-col {% if message.author == user %}items-end{% else %}items-start{% endif %} max-w-[90%] sm:max-w-[75%] lg:max-w-[65%]">
 
-        <div class="flex items-center gap-2 mb-1 px-1 w-full">
-            {% if message.author != user %}
-                <a href="{% url 'profile-user' message.author.username %}" class="inline-flex items-center gap-2 min-w-0">
-                    <img src="{{ message.author.profile.avatar }}" class="w-6 h-6 rounded-full object-cover border border-white/10">
-                    <span class="text-[14px] font-semibold text-gray-200 truncate">{{ message.author.profile.name|default:message.author.username }}</span>
-                    {% if verified_user_ids and message.author_id in verified_user_ids %}
-                        <span class="inline-flex h-4 w-4 items-center justify-center rounded-full bg-sky-500/20 text-sky-300 text-[10px] leading-none" title="Verified" aria-label="Verified">✓</span>
-                    {% endif %}
-                </a>
-            {% else %}
-                <span class="text-[14px] font-semibold text-gray-200/70 inline-flex items-center gap-2">
-                    <span>You</span>
-                    {% if verified_user_ids and user.id in verified_user_ids %}
-                        <span class="inline-flex h-4 w-4 items-center justify-center rounded-full bg-sky-500/20 text-sky-300 text-[10px] leading-none" title="Verified" aria-label="Verified">✓</span>
-                    {% endif %}
-                </span>
-            {% endif %}
-
-            <time class="ml-auto text-[11px] text-gray-400/70" data-dt="{{ message.created|date:'c' }}"></time>
-
-            <button type="button"
-                class="text-[11px] text-gray-400 hover:text-indigo-300 transition-colors"
-                data-reply-button
-                data-reply-to-id="{{ message.id }}"
-                data-reply-author="{{ message.author.profile.name|default:message.author.username|escape }}"
-                data-reply-preview="{{ message.body|default:message.file_caption|default:message.filename|default:''|escape }}">
-                Reply
-            </button>
-
-            {% if message.author == user or user.is_staff %}
-                <div class="relative">
-                    <button type="button"
-                        class="opacity-80 hover:opacity-100 inline-flex h-8 w-8 items-center justify-center rounded-full text-gray-300 hover:text-white transition duration-150 ease-out hover:bg-gray-800/60 hover:scale-105 active:scale-95"
-                        aria-label="Message actions"
-                        aria-haspopup="menu"
-                        aria-expanded="false"
-                        data-message-menu-toggle>
-                        ⋮
-                    </button>
-
-                    <div class="hidden absolute right-0 top-full mt-2 min-w-28 rounded-xl border border-gray-800 bg-gray-900/95 shadow-lg shadow-black/20 overflow-hidden z-50" data-message-menu role="menu">
-                        {% if message.author == user and message.body and message.body|slice:":6" != "[CALL]" and not message.file %}
-                            <button type="button"
-                                data-edit-message
-                                data-message-id="{{ message.id }}"
-                                data-message-body="{{ message.body|default:''|escape }}"
-                                class="w-full text-left px-3 py-2 text-xs text-gray-200 hover:bg-gray-800/60">
-                                Edit
-                            </button>
+        <div data-message-header class="mb-1 px-1 w-full{% if prev_message and prev_message.author_id == message.author_id %} hidden{% endif %}">
+            <div class="flex items-center gap-2">
+                {% if message.author != user %}
+                    <a href="{% url 'profile-user' message.author.username %}" class="inline-flex items-center gap-2 min-w-0">
+                        <img src="{{ message.author.profile.avatar }}" class="w-6 h-6 rounded-full object-cover border border-white/10">
+                        <span class="text-[14px] font-semibold text-gray-200 truncate">{{ message.author.profile.name|default:message.author.username }}</span>
+                        {% if verified_user_ids and message.author_id in verified_user_ids %}
+                            <span class="inline-flex h-4 w-4 items-center justify-center rounded-full bg-sky-500/20 text-sky-300 text-[10px] leading-none" title="Verified" aria-label="Verified">✓</span>
                         {% endif %}
-                        <button type="button"
-                            data-delete-message
-                            data-message-id="{{ message.id }}"
-                            class="w-full text-left px-3 py-2 text-xs text-gray-200 hover:bg-gray-800/60">
-                            Delete
-                        </button>
-
-                        {% if user.is_staff and message.author != user and not message.author.is_superuser %}
-                            <form method="post" action="{% url 'admin-user-toggle-block' message.author.id %}">
-                                {% csrf_token %}
-                                <input type="hidden" name="next" value="{% url 'chatroom' chat_group.group_name %}" />
-                                <button type="submit"
-                                    class="w-full text-left px-3 py-2 text-xs text-gray-200 hover:bg-gray-800/60">
-                                    {% if message.author.profile.chat_blocked %}Unblock user{% else %}Block user{% endif %}
-                                </button>
-                            </form>
+                    </a>
+                {% else %}
+                    <span class="text-[14px] font-semibold text-gray-200/70 inline-flex items-center gap-2">
+                        <span>You</span>
+                        {% if verified_user_ids and user.id in verified_user_ids %}
+                            <span class="inline-flex h-4 w-4 items-center justify-center rounded-full bg-sky-500/20 text-sky-300 text-[10px] leading-none" title="Verified" aria-label="Verified">✓</span>
                         {% endif %}
-                    </div>
-                </div>
-            {% endif %}
-        </div>
+                    </span>
+                {% endif %}
 
-        {% if message.auto_badges %}
-            <div class="mb-1 px-1 w-full flex {% if message.author == user %}justify-end{% else %}justify-start{% endif %}">
-                <div class="flex flex-wrap gap-1">
+                <time class="ml-auto text-[11px] text-gray-400/70" data-dt="{{ message.created|date:'c' }}"></time>
+            </div>
+
+            {% if message.auto_badges %}
+                <div class="mt-1 flex flex-wrap gap-1">
                     {% for b in message.auto_badges %}
                         <span class="inline-flex items-center gap-1 rounded-full border border-gray-800 bg-gray-900/50 px-2 py-0.5 text-[11px] text-gray-200/80">
                             <span aria-hidden="true">{{ b.icon }}</span>
@@ -96,20 +45,21 @@
                         </span>
                     {% endfor %}
                 </div>
-            </div>
-        {% endif %}
+            {% endif %}
+        </div>
 
         <div class="flex items-end gap-2">
             {% if message.author == user %}
                 {% include 'a_rtchat/partials/reaction_picker.html' %}
             {% endif %}
 
-            <div data-message-bubble class="px-4 py-3 rounded-2xl shadow-sm shadow-black/20 backdrop-blur-md 
+            <div data-message-bubble class="relative px-4 py-3 rounded-2xl shadow-sm shadow-black/20 backdrop-blur-md 
                 {% if message.author == user %}
                     bg-gradient-to-r from-purple-500 via-indigo-500 to-sky-500 text-white vixo-keep-white rounded-tr-none border border-white/10
                 {% else %}
                     bg-white/5 text-gray-100 border border-white/10 rounded-tl-none
                 {% endif %}">
+
                 {% if message.reply_to %}
                     <button type="button" data-scroll-to="msg-{{ message.reply_to.id }}" class="block w-full text-left mb-2">
                         <div class="px-3 py-2 rounded-xl border-l-2 border-indigo-300/70 bg-white/5">

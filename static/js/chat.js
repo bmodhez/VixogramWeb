@@ -1,4 +1,195 @@
 (function () {
+    // --- Room code click-to-copy ---
+    function copyToClipboard(text) {
+        const value = String(text || '').trim();
+        if (!value) return Promise.resolve(false);
+
+        // Modern async clipboard API
+        try {
+            if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+                return navigator.clipboard.writeText(value).then(() => true).catch(() => false);
+            }
+        } catch {
+            // ignore; fallback below
+        }
+
+        // Fallback: execCommand
+        try {
+            const ta = document.createElement('textarea');
+            ta.value = value;
+            ta.setAttribute('readonly', 'readonly');
+            ta.style.position = 'fixed';
+            ta.style.top = '-1000px';
+            ta.style.left = '-1000px';
+            document.body.appendChild(ta);
+            ta.select();
+            const ok = document.execCommand('copy');
+            ta.remove();
+            return Promise.resolve(!!ok);
+        } catch {
+            return Promise.resolve(false);
+        }
+    }
+
+    function initRoomCodeCopy() {
+        const buttons = document.querySelectorAll('[data-room-code-copy]');
+        if (!buttons || !buttons.length) return;
+
+        const hideTimers = new WeakMap();
+        const invisibleTimers = new WeakMap();
+
+        function showCopiedLabel(btn, ok) {
+            const host = btn && (btn.closest('[data-room-code-wrap]') || btn.parentElement);
+            const label = host ? host.querySelector('[data-room-code-copied]') : null;
+            if (!label) return;
+
+            // Cancel any pending hide/invisible timers
+            const prevHide = hideTimers.get(label);
+            if (prevHide) window.clearTimeout(prevHide);
+            const prevInv = invisibleTimers.get(label);
+            if (prevInv) window.clearTimeout(prevInv);
+
+            if (!ok) {
+                label.textContent = 'Copy failed';
+                label.classList.add('text-red-300');
+            } else {
+                label.textContent = 'Code copied';
+                label.classList.remove('text-red-300');
+            }
+
+            // Animate in
+            label.classList.remove('invisible');
+            // Start from hidden state (in case it's mid-transition)
+            label.classList.add('opacity-0', '-translate-y-0.5', 'scale-95');
+            label.classList.remove('opacity-100', 'translate-y-0', 'scale-100');
+            requestAnimationFrame(() => {
+                label.classList.remove('opacity-0', '-translate-y-0.5', 'scale-95');
+                label.classList.add('opacity-100', 'translate-y-0', 'scale-100');
+            });
+
+            // Animate out, then set invisible after transition
+            const hideDelay = ok ? 1200 : 1800;
+            const t = window.setTimeout(() => {
+                label.classList.add('opacity-0', '-translate-y-0.5', 'scale-95');
+                label.classList.remove('opacity-100', 'translate-y-0', 'scale-100');
+                const t2 = window.setTimeout(() => {
+                    label.classList.add('invisible');
+                }, 220);
+                invisibleTimers.set(label, t2);
+            }, hideDelay);
+            hideTimers.set(label, t);
+        }
+
+        buttons.forEach((btn) => {
+            btn.addEventListener('click', async (e) => {
+                e.preventDefault();
+                const code = btn.getAttribute('data-room-code-copy') || '';
+                const ok = await copyToClipboard(code);
+                showCopiedLabel(btn, ok);
+            });
+        });
+    }
+
+    // --- Message bubble context actions (right-click, swipe, long-press) ---
+    function __isMobileChatViewport() {
+        try {
+            return !window.matchMedia('(min-width: 640px)').matches;
+        } catch {
+            return true;
+        }
+    }
+
+    function closeAllMessageActionBars(exceptMsgEl) {
+        const open = document.querySelectorAll('.vixo-msg.vixo-actions-open');
+        open.forEach((el) => {
+            if (exceptMsgEl && el === exceptMsgEl) return;
+            el.classList.remove('vixo-actions-open');
+        });
+    }
+
+    function openMessageActionBar(msgEl) {
+        if (!msgEl) return;
+        closeAllMessageActionBars(msgEl);
+        msgEl.classList.add('vixo-actions-open');
+    }
+
+    function showMessageMenuFor(msgId) {
+        // Find the menu for this message and open it
+        const el = document.getElementById(`msg-${msgId}`);
+        if (!el) return;
+        const menu = el.querySelector('[data-message-menu]');
+        const toggle = el.querySelector('[data-message-menu-toggle]');
+        const actions = el.querySelector('[data-msg-actions]');
+        if (menu && toggle) {
+            closeAllMessageMenus(menu);
+            if (actions) {
+                actions.classList.remove('opacity-0', 'pointer-events-none');
+                actions.classList.add('opacity-100', 'pointer-events-auto');
+            }
+            menu.classList.remove('hidden');
+            toggle.setAttribute('aria-expanded', 'true');
+        }
+    }
+
+    // Desktop: right-click context menu
+    document.addEventListener('contextmenu', function(e) {
+        const msg = e.target.closest('.vixo-msg');
+        if (!msg) return;
+        const msgId = msg.dataset.messageId;
+        if (!msgId) return;
+        e.preventDefault();
+        showMessageMenuFor(msgId);
+    });
+
+    // Mobile: swipe left to reply, long-press to reveal options
+    let touchStartX = 0, touchStartY = 0, touchStartTime = 0, touchTimer = null;
+    document.addEventListener('touchstart', function(e) {
+        const msg = e.target.closest('.vixo-msg');
+        if (!msg) return;
+        if (e.touches.length !== 1) return;
+        touchStartX = e.touches[0].clientX;
+        touchStartY = e.touches[0].clientY;
+        touchStartTime = Date.now();
+        touchTimer = setTimeout(() => {
+            // Long press: reveal reply/+ / ⋮ (tap ⋮ to open the menu)
+            if (!__isMobileChatViewport()) return;
+            try { closeAllReactionPickers(); } catch {}
+            try { closeAllMessageMenus(); } catch {}
+            openMessageActionBar(msg);
+        }, 520); // ~0.5s hold
+    }, { passive: true });
+    document.addEventListener('touchend', function(e) {
+        if (touchTimer) clearTimeout(touchTimer);
+        const msg = e.target.closest('.vixo-msg');
+        if (!msg) return;
+        if (e.changedTouches.length !== 1) return;
+        const dx = e.changedTouches[0].clientX - touchStartX;
+        const dy = e.changedTouches[0].clientY - touchStartY;
+        const dt = Date.now() - touchStartTime;
+        // Quick left swipe (horizontal, not vertical, not long-press)
+        if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy) && dx < 0 && dt < 400) {
+            // Swipe left: quick reply
+            closeAllMessageActionBars();
+            const replyBtn = msg.querySelector('[data-reply-button]');
+            if (replyBtn) replyBtn.click();
+        }
+    }, { passive: true });
+    document.addEventListener('touchmove', function(e) {
+        if (touchTimer) clearTimeout(touchTimer);
+    }, { passive: true });
+
+    // Mobile: tap outside closes the revealed action icons.
+    document.addEventListener('click', function (e) {
+        if (!__isMobileChatViewport()) return;
+
+        // If user clicks inside action icons or an open menu, keep it open.
+        const keep = e.target && e.target.closest
+            ? e.target.closest('.vixo-msg.vixo-actions-open [data-msg-actions], .vixo-msg.vixo-actions-open [data-message-menu]')
+            : null;
+        if (keep) return;
+
+        closeAllMessageActionBars();
+    }, true);
     function readJsonScript(id) {
         try {
             const el = document.getElementById(id);
@@ -14,6 +205,18 @@
     const cfg = (window.__vixo_chat_config && typeof window.__vixo_chat_config === 'object')
         ? window.__vixo_chat_config
         : (readJsonScript('vixo-chat-config') || {});
+
+    // chat.js is injected after DOMContentLoaded via chat_loader.js, so DOM is usually ready.
+    // Still guard for rare cases.
+    try {
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initRoomCodeCopy, { once: true });
+        } else {
+            initRoomCodeCopy();
+        }
+    } catch {
+        // ignore
+    }
 
     const chatroomName = String(cfg.chatroomName || '');
     const currentUserId = parseInt(cfg.currentUserId || 0, 10) || 0;
@@ -1175,6 +1378,7 @@
                         if (messagesEl) {
                             messagesEl.insertAdjacentHTML('beforeend', html);
                             hydrateLocalTimes(messagesEl);
+                            applyConsecutiveHeaderGrouping(messagesEl);
                             updateLastIdFromDom();
                         }
                         window.__forceNextChatScroll = true;
@@ -1337,6 +1541,39 @@
         });
     }
 
+    function applyConsecutiveHeaderGrouping(root) {
+        const container = root || messagesEl;
+        if (!container || !container.querySelectorAll) return;
+
+        const items = Array.from(container.querySelectorAll('.vixo-msg[data-message-id]'));
+        let prevAuthorId = null;
+        for (const el of items) {
+            const authorId = (el.getAttribute('data-author-id') || '').trim();
+            const header = el.querySelector('[data-message-header]');
+            if (header) {
+                if (prevAuthorId && authorId && authorId === prevAuthorId) header.classList.add('hidden');
+                else header.classList.remove('hidden');
+            }
+            prevAuthorId = authorId || null;
+        }
+    }
+
+    function revealChatContainer() {
+        const c = document.getElementById('chat_container');
+        if (c) c.classList.remove('vixo-chat-init-hidden');
+    }
+
+    function hardScrollToBottom(container) {
+        const c = container || document.getElementById('chat_container');
+        if (!c) return;
+        try {
+            const targetTop = Math.max(0, c.scrollHeight - c.clientHeight);
+            c.scrollTop = targetTop;
+        } catch {
+            // ignore
+        }
+    }
+
     function safeScrollToBottom() {
         if (typeof scrollToBottom === 'function') scrollToBottom();
     }
@@ -1344,7 +1581,9 @@
     function forceScrollToBottomNow() {
         if (typeof scrollToBottom === 'function') {
             scrollToBottom({ force: true, behavior: 'auto' });
+            return;
         }
+        hardScrollToBottom();
     }
 
     function updateLastIdFromDom() {
@@ -1381,6 +1620,7 @@
                 }
                 messagesEl.insertAdjacentHTML('beforeend', payload.html);
                 hydrateLocalTimes(messagesEl);
+                applyConsecutiveHeaderGrouping(messagesEl);
                 updateLastIdFromDom();
                 const shouldForce = !!window.__forceNextChatScroll || !!__chatAutoScrollEnabled;
                 if (window.__forceNextChatScroll) {
@@ -1412,6 +1652,7 @@
                 if (el) {
                     el.outerHTML = payload.html;
                     hydrateLocalTimes(document);
+                    applyConsecutiveHeaderGrouping(messagesEl);
                     applyReadTicks(lastOtherReadId);
                 }
                 return;
@@ -1523,6 +1764,7 @@
     document.addEventListener('DOMContentLoaded', function () {
         updateLastIdFromDom();
         hydrateLocalTimes(document);
+        applyConsecutiveHeaderGrouping(messagesEl);
         applyReadTicks(lastOtherReadId);
         safeScrollToBottom();
     });
@@ -1710,6 +1952,17 @@
             menu.classList.add('hidden');
             const toggle = menu.parentElement ? menu.parentElement.querySelector('[data-message-menu-toggle]') : null;
             if (toggle) toggle.setAttribute('aria-expanded', 'false');
+
+            const msg = menu.closest ? menu.closest('.vixo-msg') : null;
+            const actions = msg ? msg.querySelector('[data-msg-actions]') : null;
+            try {
+                if (actions && msg && !msg.matches(':hover')) {
+                    actions.classList.add('opacity-0', 'pointer-events-none');
+                    actions.classList.remove('opacity-100', 'pointer-events-auto');
+                }
+            } catch {
+                // ignore
+            }
         });
     }
 
@@ -2274,6 +2527,7 @@
                 }
                 messagesEl.insertAdjacentHTML('beforeend', data.messages_html);
                 hydrateLocalTimes(messagesEl);
+                applyConsecutiveHeaderGrouping(messagesEl);
                 updateLastIdFromDom();
                 if (__chatAutoScrollEnabled) forceScrollToBottomNow();
             }
@@ -2292,18 +2546,27 @@
         if (window.__didInitialChatScroll) return;
         window.__didInitialChatScroll = true;
 
+        // Hide chat until we've snapped to bottom to avoid the “starts at top then scrolls down” effect.
+        // (Visibility is controlled via the template-added class.)
+        hardScrollToBottom();
+        revealChatContainer();
+
         // Run a few times to handle layout/avatars loading.
         try {
             requestAnimationFrame(() => {
                 forceScrollToBottomNow();
-                requestAnimationFrame(() => forceScrollToBottomNow());
+                revealChatContainer();
+                requestAnimationFrame(() => {
+                    forceScrollToBottomNow();
+                    revealChatContainer();
+                });
             });
         } catch {
             // ignore
         }
-        setTimeout(forceScrollToBottomNow, 0);
-        setTimeout(forceScrollToBottomNow, 120);
-        setTimeout(forceScrollToBottomNow, 320);
+        setTimeout(() => { forceScrollToBottomNow(); revealChatContainer(); }, 0);
+        setTimeout(() => { forceScrollToBottomNow(); revealChatContainer(); }, 120);
+        setTimeout(() => { forceScrollToBottomNow(); revealChatContainer(); }, 320);
     })();
 
     setInterval(poll, 1200);

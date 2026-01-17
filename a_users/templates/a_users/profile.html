@@ -117,13 +117,13 @@
             {% endif %}
 
             {% if user.is_authenticated and user == profile.user %}
-                <div class="mt-8 flex gap-3 justify-center">
+                <div class="mt-8 flex w-full gap-3">
                     <a href="{% url 'profile-edit' %}"
-                       class="bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-2 px-6 rounded-lg transition-colors">
+                       class="flex-1 inline-flex items-center justify-center text-center whitespace-nowrap bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-2 px-4 rounded-lg transition-colors">
                         Edit profile
                     </a>
                     <a href="{% url 'profile-settings' %}"
-                       class="bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-6 rounded-lg transition-colors">
+                       class="flex-1 inline-flex items-center justify-center text-center whitespace-nowrap bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg transition-colors">
                         Settings
                     </a>
                 </div>

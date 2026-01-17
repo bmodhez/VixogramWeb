@@ -454,6 +454,12 @@ AUTH_RATE_LIMIT_PERIOD = int(os.environ.get('AUTH_RATE_LIMIT_PERIOD', '300'))
 CHAT_MSG_RATE_LIMIT = int(os.environ.get('CHAT_MSG_RATE_LIMIT', '8'))
 CHAT_MSG_RATE_PERIOD = int(os.environ.get('CHAT_MSG_RATE_PERIOD', '10'))
 
+# Chat burst protection (fast spam): if a user sends too many messages in a very short window,
+# apply a short cooldown (uses the same cache backend as other rate limits).
+CHAT_BURST_MSG_LIMIT = int(os.environ.get('CHAT_BURST_MSG_LIMIT', '5'))
+CHAT_BURST_MSG_PERIOD = int(os.environ.get('CHAT_BURST_MSG_PERIOD', '3'))
+CHAT_BURST_COOLDOWN_SECONDS = int(os.environ.get('CHAT_BURST_COOLDOWN_SECONDS', '10'))
+
 # Room-wide flood protection
 ROOM_MSG_RATE_LIMIT = int(os.environ.get('ROOM_MSG_RATE_LIMIT', '30'))
 ROOM_MSG_RATE_PERIOD = int(os.environ.get('ROOM_MSG_RATE_PERIOD', '10'))
@@ -544,7 +550,7 @@ MEDIA_ROOT = BASE_DIR / 'media'
 # Override if needed (e.g., for production):
 # - CHAT_UPLOAD_LIMIT_PER_ROOM: max uploads per user per room
 # - CHAT_UPLOAD_MAX_BYTES: max single file size
-CHAT_UPLOAD_LIMIT_PER_ROOM = int(os.environ.get('CHAT_UPLOAD_LIMIT_PER_ROOM', '5'))
+CHAT_UPLOAD_LIMIT_PER_ROOM = int(os.environ.get('CHAT_UPLOAD_LIMIT_PER_ROOM', '15'))
 CHAT_UPLOAD_MAX_BYTES = 10 * 1024 * 1024
 
 # Agora (Voice/Video Calls)

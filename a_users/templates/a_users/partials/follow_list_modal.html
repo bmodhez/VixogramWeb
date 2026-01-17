@@ -7,6 +7,7 @@ Context:
 - items: list[Follow]
 - total_count
 - is_full
+- verified_user_ids: set[int]
 
 This template is loaded into the profile follow-list modal body via HTMX.
 {% endcomment %}
@@ -33,7 +34,18 @@ This template is loaded into the profile follow-list modal body via HTMX.
               <a href="{% url 'profile-user' u.username %}" class="flex items-center gap-3 min-w-0 flex-1 hover:bg-gray-800/40 rounded-lg px-2 py-2 transition-colors">
                 <img src="{{ u.profile.avatar }}" class="w-9 h-9 rounded-full object-cover border border-gray-700" alt="{{ u.username }}" />
                 <div class="min-w-0">
-                  <div class="text-sm text-gray-100 font-semibold truncate">{{ u.profile.name }}</div>
+                  <div class="text-sm text-gray-100 font-semibold flex items-center gap-2 min-w-0">
+                    <span class="truncate">{{ u.profile.name }}</span>
+                    {% if u.id in verified_user_ids %}
+                      <span
+                        class="inline-flex h-4 w-4 flex-none items-center justify-center rounded-full bg-sky-500/20 text-sky-300 text-[10px] leading-none"
+                        title="Verified"
+                        aria-label="Verified"
+                      >
+                        ✓
+                      </span>
+                    {% endif %}
+                  </div>
                   <div class="text-xs text-gray-400 truncate">@{{ u.username }}</div>
                 </div>
               </a>
@@ -45,7 +57,18 @@ This template is loaded into the profile follow-list modal body via HTMX.
               <a href="{% url 'profile-user' u.username %}" class="flex items-center gap-3 min-w-0 flex-1 hover:bg-gray-800/40 rounded-lg px-2 py-2 transition-colors">
                 <img src="{{ u.profile.avatar }}" class="w-9 h-9 rounded-full object-cover border border-gray-700" alt="{{ u.username }}" />
                 <div class="min-w-0">
-                  <div class="text-sm text-gray-100 font-semibold truncate">{{ u.profile.name }}</div>
+                  <div class="text-sm text-gray-100 font-semibold flex items-center gap-2 min-w-0">
+                    <span class="truncate">{{ u.profile.name }}</span>
+                    {% if u.id in verified_user_ids %}
+                      <span
+                        class="inline-flex h-4 w-4 flex-none items-center justify-center rounded-full bg-sky-500/20 text-sky-300 text-[10px] leading-none"
+                        title="Verified"
+                        aria-label="Verified"
+                      >
+                        ✓
+                      </span>
+                    {% endif %}
+                  </div>
                   <div class="text-xs text-gray-400 truncate">@{{ u.username }}</div>
                 </div>
               </a>

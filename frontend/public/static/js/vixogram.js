@@ -1229,6 +1229,27 @@
       const closeBtn = document.getElementById('notif_close');
       if (!btn || !panel) return;
 
+      function clampPanelToViewport() {
+        try {
+          if (window.matchMedia && window.matchMedia('(max-width: 639px)').matches) return;
+          if (!panel || panel.classList.contains('hidden')) return;
+          panel.style.transform = '';
+
+          const pad = 12;
+          const rect = panel.getBoundingClientRect();
+          const vw = window.innerWidth || 0;
+          if (!vw) return;
+
+          let dx = 0;
+          if (rect.left < pad) dx = pad - rect.left;
+          if (rect.right + dx > vw - pad) dx = (vw - pad) - rect.right;
+
+          if (dx) panel.style.transform = `translateX(${Math.round(dx)}px)`;
+        } catch {
+          // ignore
+        }
+      }
+
       let refreshTimer = null;
       function refreshDropdownIfOpen() {
         try {
@@ -1285,6 +1306,7 @@
       const open = () => {
         panel.classList.remove('hidden');
         btn.setAttribute('aria-expanded', 'true');
+        setTimeout(clampPanelToViewport, 0);
         try {
           if (window.htmx && typeof window.htmx.ajax === 'function') {
             const url = btn.getAttribute('hx-get');
@@ -1296,6 +1318,7 @@
       const close = () => {
         panel.classList.add('hidden');
         btn.setAttribute('aria-expanded', 'false');
+        try { panel.style.transform = ''; } catch {}
       };
 
       btn.addEventListener('click', (e) => {
@@ -1343,6 +1366,8 @@
         if (!target) return;
         if (target.id !== 'notif_dropdown_body') return;
 
+        clampPanelToViewport();
+
         const marker = target.querySelector('[data-notif-unread]');
         if (!marker) return;
         const raw = marker.getAttribute('data-notif-unread') || '0';
@@ -1354,6 +1379,8 @@
       });
 
       window.__refreshNotifDropdownIfOpen = refreshDropdownIfOpen;
+
+      window.addEventListener('resize', clampPanelToViewport);
     }
 
     function unlockAudioOnce() {

@@ -1,0 +1,283 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="min-h-[calc(100vh-7rem)] py-6">
+  <div class="w-full max-w-6xl mx-auto bg-gray-900/60 border border-gray-800 rounded-2xl shadow-2xl p-6">
+    <div class="flex items-start justify-between gap-4">
+      <div>
+        <h1 class="text-2xl font-bold text-emerald-400">Admin analytics</h1>
+        <p class="text-sm text-gray-300 mt-1">Growth, spam/abuse signals, and room health (staff only).</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <a href="{% url 'admin-users' %}" class="text-sm bg-gray-800 hover:bg-gray-700 text-white px-4 py-2 rounded-lg transition-colors">Manage users</a>
+        <a href="{% url 'admin-reports' %}" class="text-sm bg-gray-800 hover:bg-gray-700 text-white px-4 py-2 rounded-lg transition-colors">User reports</a>
+        <a href="{% url 'moderation-logs' %}" class="text-sm bg-gray-800 hover:bg-gray-700 text-white px-4 py-2 rounded-lg transition-colors">Moderation logs</a>
+        <a href="{% url 'home' %}" class="text-sm bg-gray-800 hover:bg-gray-700 text-white px-4 py-2 rounded-lg transition-colors">Back to chat</a>
+      </div>
+    </div>
+
+    <!-- Summary cards -->
+    <div class="mt-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div class="rounded-2xl border border-gray-800 bg-gray-950/40 p-4">
+        <div class="text-xs text-gray-400">Total users</div>
+        <div class="mt-2 text-2xl font-bold text-gray-100" id="kpi_total_users">{{ total_users }}</div>
+        <div class="mt-1 text-xs text-gray-400">New (24h): <span class="text-gray-200" id="kpi_new_users_24h">{{ new_users_24h }}</span></div>
+      </div>
+
+      <div class="rounded-2xl border border-gray-800 bg-gray-950/40 p-4">
+        <div class="text-xs text-gray-400">Online users (live)</div>
+        <div class="mt-2 text-2xl font-bold text-gray-100" id="kpi_online_now">{{ online_now }}</div>
+        <div class="mt-1 text-xs text-gray-400">Peak today: <span class="text-gray-200" id="kpi_peak_today">{{ peak_today }}</span></div>
+      </div>
+
+      <div class="rounded-2xl border border-gray-800 bg-gray-950/40 p-4">
+        <div class="text-xs text-gray-400">Total messages</div>
+        <div class="mt-2 text-2xl font-bold text-gray-100" id="kpi_messages_today">{{ messages_today }}</div>
+        <div class="mt-1 text-xs text-gray-400">Last 7d: <span class="text-gray-200" id="kpi_messages_7d">{{ messages_7d }}</span></div>
+      </div>
+
+      <div class="rounded-2xl border border-gray-800 bg-gray-950/40 p-4">
+        <div class="text-xs text-gray-400">Blocked / spam-filtered</div>
+        <div class="mt-2 text-2xl font-bold text-gray-100" id="kpi_blocked_today">{{ blocked_today }}</div>
+        <div class="mt-1 text-xs text-gray-400">
+          vs yesterday:
+          {% if blocked_pct_vs_yesterday is not None %}
+            <span class="text-gray-200">{{ blocked_pct_vs_yesterday }}%</span>
+          {% else %}
+            <span class="text-gray-500">—</span>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <!-- Activity graph + Quality -->
+    <div class="mt-6 grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <div class="lg:col-span-2 rounded-2xl border border-gray-800 bg-gray-950/40 p-4">
+        <div class="flex items-center justify-between">
+          <div>
+            <div class="text-sm font-semibold text-gray-200">Messages timeline (last 7 days)</div>
+            <div class="text-xs text-gray-400">Helps spot spam peaks vs real activity.</div>
+          </div>
+        </div>
+        <div class="mt-3">
+          <canvas id="chart_messages" height="120"></canvas>
+        </div>
+      </div>
+
+      <div class="rounded-2xl border border-gray-800 bg-gray-950/40 p-4">
+        <div class="text-sm font-semibold text-gray-200">Message quality split (last 7d)</div>
+        <div class="text-xs text-gray-400">Based on AI moderation logs + blocked events (best-effort).</div>
+        <div class="mt-3">
+          <canvas id="chart_quality" height="120"></canvas>
+        </div>
+        <div class="mt-3 text-xs text-gray-400">
+          If AI moderation is OFF, only “Blocked” will populate reliably.
+        </div>
+      </div>
+    </div>
+
+    <!-- Top lists -->
+    <div class="mt-6 grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div class="rounded-2xl border border-gray-800 bg-gray-950/40 p-4">
+        <div class="text-sm font-semibold text-gray-200">Most active users (last 7d)</div>
+        <div class="mt-3 overflow-x-auto rounded-xl border border-gray-800">
+          <table class="min-w-full text-sm">
+            <thead class="bg-gray-900/80">
+              <tr class="text-left text-gray-300">
+                <th class="px-4 py-3">User</th>
+                <th class="px-4 py-3">Messages</th>
+                <th class="px-4 py-3">Quality score</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-800">
+              {% for u in most_active %}
+                <tr class="bg-gray-900/40 text-gray-200">
+                  <td class="px-4 py-3 font-semibold">{{ u.author__username }}</td>
+                  <td class="px-4 py-3">{{ u.messages }}</td>
+                  <td class="px-4 py-3">
+                    {% if u.quality_score is not None %}
+                      <span class="text-emerald-300 font-semibold">{{ u.quality_score }}%</span>
+                    {% else %}
+                      <span class="text-gray-500">—</span>
+                    {% endif %}
+                  </td>
+                </tr>
+              {% empty %}
+                <tr><td colspan="3" class="px-4 py-8 text-center text-gray-400">No data.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="rounded-2xl border border-gray-800 bg-gray-950/40 p-4">
+        <div class="text-sm font-semibold text-gray-200">Top spammers / blocked attempts (last 7d)</div>
+        <div class="mt-3 overflow-x-auto rounded-xl border border-gray-800">
+          <table class="min-w-full text-sm">
+            <thead class="bg-gray-900/80">
+              <tr class="text-left text-gray-300">
+                <th class="px-4 py-3">User</th>
+                <th class="px-4 py-3">Blocked</th>
+                <th class="px-4 py-3">Auto action</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-800">
+              {% for u in top_spammers %}
+                <tr class="bg-gray-900/40 text-gray-200">
+                  <td class="px-4 py-3 font-semibold">{{ u.user__username }}</td>
+                  <td class="px-4 py-3">{{ u.spam }}</td>
+                  <td class="px-4 py-3 text-gray-300">{{ u.auto_action }}</td>
+                </tr>
+              {% empty %}
+                <tr><td colspan="3" class="px-4 py-8 text-center text-gray-400">No data.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Chatroom stats -->
+    <div class="mt-6 rounded-2xl border border-gray-800 bg-gray-950/40 p-4">
+      <div class="text-sm font-semibold text-gray-200">Chatroom stats (today)</div>
+      <div class="text-xs text-gray-400">Messages, active users, and blocked ratio per room.</div>
+      <div class="mt-3 overflow-x-auto rounded-xl border border-gray-800">
+        <table class="min-w-full text-sm">
+          <thead class="bg-gray-900/80">
+            <tr class="text-left text-gray-300">
+              <th class="px-4 py-3">Room</th>
+              <th class="px-4 py-3">Messages</th>
+              <th class="px-4 py-3">Active users</th>
+              <th class="px-4 py-3">Blocked</th>
+              <th class="px-4 py-3">Spam ratio</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-800">
+            {% for r in room_rows %}
+              <tr class="bg-gray-900/40 text-gray-200">
+                <td class="px-4 py-3 font-semibold">{{ r.name }}</td>
+                <td class="px-4 py-3">{{ r.messages }}</td>
+                <td class="px-4 py-3">{{ r.active_users }}</td>
+                <td class="px-4 py-3">{{ r.blocked }}</td>
+                <td class="px-4 py-3">
+                  {% if r.spam_ratio >= 10 %}
+                    <span class="text-red-300 font-semibold">{{ r.spam_ratio }}%</span>
+                  {% elif r.spam_ratio >= 3 %}
+                    <span class="text-amber-300 font-semibold">{{ r.spam_ratio }}%</span>
+                  {% else %}
+                    <span class="text-emerald-300 font-semibold">{{ r.spam_ratio }}%</span>
+                  {% endif %}
+                </td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="5" class="px-4 py-8 text-center text-gray-400">No rooms.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Reports & moderation -->
+    <div class="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div class="rounded-2xl border border-gray-800 bg-gray-950/40 p-4">
+        <div class="text-xs text-gray-400">Reports today</div>
+        <div class="mt-2 text-2xl font-bold text-gray-100">{{ reports_today }}</div>
+        <div class="mt-1 text-xs text-gray-400">Open: <span class="text-gray-200" id="kpi_open_reports">{{ reports_open }}</span></div>
+      </div>
+
+      <div class="rounded-2xl border border-gray-800 bg-gray-950/40 p-4">
+        <div class="text-xs text-gray-400">Support enquiries today</div>
+        <div class="mt-2 text-2xl font-bold text-gray-100">{{ enquiries_today }}</div>
+        <div class="mt-1 text-xs text-gray-400">Open: <span class="text-gray-200" id="kpi_open_enquiries">{{ enquiries_open }}</span></div>
+      </div>
+
+      <div class="rounded-2xl border border-gray-800 bg-gray-950/40 p-4">
+        <div class="text-xs text-gray-400">Manual pending</div>
+        <div class="mt-2 text-2xl font-bold text-gray-100" id="kpi_pending">{{ pending_actions }}</div>
+        <div class="mt-1 text-xs text-gray-400">Auto actions today: <span class="text-gray-200">{{ auto_actions_today }}</span></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Charts -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+  const dailyLabels = {{ daily_labels_json|safe }};
+  const dailyCounts = {{ daily_counts_json|safe }};
+  const quality = {{ quality_json|safe }};
+
+  const ctx1 = document.getElementById('chart_messages');
+  new Chart(ctx1, {
+    type: 'line',
+    data: {
+      labels: dailyLabels,
+      datasets: [{
+        label: 'Messages',
+        data: dailyCounts,
+        borderColor: 'rgb(99, 102, 241)',
+        backgroundColor: 'rgba(99, 102, 241, 0.15)',
+        fill: true,
+        tension: 0.35,
+        pointRadius: 3,
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { display: false },
+        tooltip: { mode: 'index', intersect: false }
+      },
+      interaction: { mode: 'index', intersect: false },
+      scales: {
+        x: { ticks: { color: 'rgba(229,231,235,0.8)' }, grid: { color: 'rgba(55,65,81,0.35)' } },
+        y: { ticks: { color: 'rgba(229,231,235,0.8)' }, grid: { color: 'rgba(55,65,81,0.35)' }, beginAtZero: true }
+      }
+    }
+  });
+
+  const ctx2 = document.getElementById('chart_quality');
+  new Chart(ctx2, {
+    type: 'doughnut',
+    data: {
+      labels: ['Useful', 'Low quality', 'Blocked'],
+      datasets: [{
+        data: [quality.useful || 0, quality.low || 0, quality.spam || 0],
+        backgroundColor: ['rgba(16,185,129,0.75)', 'rgba(245,158,11,0.75)', 'rgba(239,68,68,0.75)'],
+        borderColor: 'rgba(17,24,39,1)',
+        borderWidth: 2,
+      }]
+    },
+    options: {
+      plugins: {
+        legend: { position: 'bottom', labels: { color: 'rgba(229,231,235,0.8)' } }
+      }
+    }
+  });
+
+  // Live polling for online counts + badges
+  async function refreshLive() {
+    try {
+      const resp = await fetch('{% url "admin-analytics-live" %}', { credentials: 'same-origin' });
+      const data = await resp.json();
+      if (!data || !data.ok) return;
+
+      const setText = (id, v) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = String(v);
+      };
+      setText('kpi_online_now', data.online_now);
+      setText('kpi_peak_today', data.peak_today);
+      setText('kpi_messages_today', data.messages_today);
+      setText('kpi_blocked_today', data.blocked_today);
+      setText('kpi_open_reports', data.open_reports);
+      setText('kpi_open_enquiries', data.open_enquiries);
+      setText('kpi_pending', (data.open_reports || 0) + (data.open_enquiries || 0));
+    } catch (e) {
+      // ignore
+    }
+  }
+  setInterval(refreshLive, 5000);
+</script>
+{% endblock %}

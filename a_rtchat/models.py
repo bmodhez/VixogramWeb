@@ -160,3 +160,47 @@ class MessageReaction(models.Model):
     def __str__(self):
         return f"{self.user.username} reacted {self.emoji} to #{self.message_id}"
 
+
+class BlockedMessageEvent(models.Model):
+    """Analytics log for blocked chat attempts (spam/flood/moderation).
+
+    This intentionally duplicates small bits of context so staff dashboards can
+    show trends even when anti-spam uses cache-only counters.
+    """
+
+    SCOPE_CHOICES = (
+        ('muted', 'Muted'),
+        ('room_flood', 'Room flood'),
+        ('dup_msg', 'Duplicate message'),
+        ('emoji_spam', 'Emoji spam'),
+        ('typing_speed', 'Typing speed'),
+        ('fast_long_msg', 'Fast long msg'),
+        ('chat_send', 'Rate limit'),
+        ('chat_upload', 'Upload rate limit'),
+        ('ai_block', 'AI block'),
+        ('other', 'Other'),
+    )
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='blocked_message_events')
+    room = models.ForeignKey(ChatGroup, on_delete=models.SET_NULL, null=True, blank=True, related_name='blocked_message_events')
+    scope = models.CharField(max_length=32, choices=SCOPE_CHOICES, default='other', db_index=True)
+
+    status_code = models.PositiveSmallIntegerField(default=0)
+    retry_after = models.PositiveIntegerField(default=0)
+    auto_muted_seconds = models.PositiveIntegerField(default=0)
+
+    text = models.TextField(blank=True, default='')
+    meta = models.JSONField(default=dict, blank=True)
+    created = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ['-created']
+        indexes = [
+            models.Index(fields=['room', '-created'], name='bme_room_created_idx'),
+            models.Index(fields=['user', '-created'], name='bme_user_created_idx'),
+            models.Index(fields=['scope', '-created'], name='bme_scope_created_idx'),
+        ]
+
+    def __str__(self):
+        return f"Blocked({self.scope}) u={self.user_id} room={getattr(self.room, 'group_name', '')}"
+

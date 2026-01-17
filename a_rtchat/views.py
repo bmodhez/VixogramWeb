@@ -1,6 +1,7 @@
 import json
 from datetime import timedelta
 
+from django.contrib.auth import get_user_model
 from django.shortcuts import render, get_object_or_404, redirect 
 from django.contrib.auth.decorators import login_required
 from channels.layers import get_channel_layer
@@ -16,11 +17,13 @@ from django.urls import reverse
 from django.db import transaction
 from django.db.models import Q
 from django.db.models import Count
+from django.db.models.functions import TruncDate, TruncHour
 from django.utils.http import url_has_allowed_host_and_scheme
 from a_users.badges import get_verified_user_ids
 from a_users.models import Profile
 from a_users.models import FCMToken
 from a_users.models import UserReport
+from a_users.models import SupportEnquiry
 from .models import *
 from .forms import *
 from .agora import build_rtc_token
@@ -31,6 +34,35 @@ from a_rtchat.link_policy import contains_link
 from .room_policy import room_allows_links, room_allows_uploads
 from .auto_badges import attach_auto_badges
 from .natasha_bot import trigger_natasha_reply_after_commit, NATASHA_USERNAME
+
+
+def _log_blocked_message_event(
+    *,
+    user,
+    chat_group,
+    scope: str,
+    status_code: int,
+    retry_after: int = 0,
+    auto_muted_seconds: int = 0,
+    text: str = '',
+    meta: dict | None = None,
+) -> None:
+    """Best-effort analytics log for blocked/spam-filtered chat attempts."""
+    try:
+        if not user or not getattr(user, 'id', None):
+            return
+        BlockedMessageEvent.objects.create(
+            user=user,
+            room=chat_group,
+            scope=(scope or 'other')[:32],
+            status_code=int(status_code or 0),
+            retry_after=max(0, int(retry_after or 0)),
+            auto_muted_seconds=max(0, int(auto_muted_seconds or 0)),
+            text=(text or '')[:2000],
+            meta=(meta or {}),
+        )
+    except Exception:
+        return
 
 
 @login_required
@@ -95,7 +127,7 @@ def _celery_broker_configured() -> bool:
         return False
 
 
-CHAT_UPLOAD_LIMIT_PER_ROOM = getattr(settings, 'CHAT_UPLOAD_LIMIT_PER_ROOM', 5)
+CHAT_UPLOAD_LIMIT_PER_ROOM = getattr(settings, 'CHAT_UPLOAD_LIMIT_PER_ROOM', 15)
 CHAT_UPLOAD_MAX_BYTES = getattr(settings, 'CHAT_UPLOAD_MAX_BYTES', 10 * 1024 * 1024)
 CHAT_REACTION_EMOJIS = getattr(settings, 'CHAT_REACTION_EMOJIS', ['👍', '❤️', '😂', '😮', '😢', '🙏'])
 PRIVATE_ROOM_MEMBER_LIMIT = int(getattr(settings, 'PRIVATE_ROOM_MEMBER_LIMIT', 10))
@@ -131,7 +163,9 @@ def _attach_reaction_pills(messages, user):
     for row in (
         MessageReaction.objects.filter(message_id__in=message_ids, emoji__in=CHAT_REACTION_EMOJIS)
         .values('message_id', 'emoji')
-        .annotate(count=Count('id'))
+        # Enforce counts as "number of users" per emoji; this also protects against any legacy
+        # duplicate reactions where a user may have reacted with multiple emojis.
+        .annotate(count=Count('user_id', distinct=True))
     ):
         counts[(row['message_id'], row['emoji'])] = int(row['count'] or 0)
 
@@ -403,6 +437,13 @@ def chat_view(request, chatroom_name='public-chat'):
             return resp
 
         if chat_muted_seconds > 0:
+            _log_blocked_message_event(
+                user=request.user,
+                chat_group=chat_group,
+                scope='muted',
+                status_code=429,
+                retry_after=int(chat_muted_seconds or 0),
+            )
             resp = HttpResponse('', status=429)
             resp.headers['Retry-After'] = str(chat_muted_seconds)
             return resp
@@ -428,6 +469,15 @@ def chat_view(request, chatroom_name='public-chat'):
                     window_seconds=int(getattr(settings, 'CHAT_ABUSE_WINDOW', 600)),
                     threshold=int(getattr(settings, 'CHAT_ABUSE_STRIKE_THRESHOLD', 5)),
                     mute_seconds=int(getattr(settings, 'CHAT_ABUSE_MUTE_SECONDS', 60)),
+                )
+                _log_blocked_message_event(
+                    user=request.user,
+                    chat_group=chat_group,
+                    scope='chat_upload',
+                    status_code=429,
+                    retry_after=int(muted2 or rl.retry_after),
+                    auto_muted_seconds=int(muted2 or 0),
+                    text=(caption or ''),
                 )
                 resp = HttpResponse('<div class="text-xs text-red-400">Too many uploads. Please wait.</div>', status=429)
                 resp.headers['Retry-After'] = str(muted2 or rl.retry_after)
@@ -594,6 +644,13 @@ def chat_view(request, chatroom_name='public-chat'):
                 threshold=int(getattr(settings, 'CHAT_ABUSE_STRIKE_THRESHOLD', 5)),
                 mute_seconds=int(getattr(settings, 'CHAT_ABUSE_MUTE_SECONDS', 60)),
             )
+            _log_blocked_message_event(
+                user=request.user,
+                chat_group=chat_group,
+                scope='room_flood',
+                status_code=429,
+                retry_after=int(room_rl.retry_after),
+            )
             resp = HttpResponse('', status=429)
             resp.headers['Retry-After'] = str(room_rl.retry_after)
             return resp
@@ -624,6 +681,14 @@ def chat_view(request, chatroom_name='public-chat'):
                     mute_seconds=int(getattr(settings, 'CHAT_ABUSE_MUTE_SECONDS', 60)),
                     weight=2,
                 )
+                _log_blocked_message_event(
+                    user=request.user,
+                    chat_group=chat_group,
+                    scope='dup_msg',
+                    status_code=429,
+                    retry_after=int(dup_retry),
+                    text=raw_body,
+                )
                 resp = HttpResponse('', status=429)
                 resp.headers['Retry-After'] = str(dup_retry)
                 return resp
@@ -643,6 +708,15 @@ def chat_view(request, chatroom_name='public-chat'):
                     threshold=int(getattr(settings, 'CHAT_ABUSE_STRIKE_THRESHOLD', 5)),
                     mute_seconds=int(getattr(settings, 'CHAT_ABUSE_MUTE_SECONDS', 60)),
                     weight=2,
+                )
+                _log_blocked_message_event(
+                    user=request.user,
+                    chat_group=chat_group,
+                    scope='emoji_spam',
+                    status_code=429,
+                    retry_after=int(muted3 or emoji_retry),
+                    auto_muted_seconds=int(muted3 or 0),
+                    text=raw_body,
                 )
                 resp = HttpResponse('', status=429)
                 resp.headers['Retry-After'] = str(muted3 or emoji_retry)
@@ -672,6 +746,19 @@ def chat_view(request, chatroom_name='public-chat'):
                         mute_seconds=int(getattr(settings, 'CHAT_ABUSE_MUTE_SECONDS', 60)),
                         weight=2,
                     )
+                    _log_blocked_message_event(
+                        user=request.user,
+                        chat_group=chat_group,
+                        scope='typing_speed',
+                        status_code=429,
+                        retry_after=int(muted4 or int(getattr(settings, 'SPEED_SPAM_TTL', 10))),
+                        auto_muted_seconds=int(muted4 or 0),
+                        text=raw_body,
+                        meta={
+                            'typed_ms': int(typed_ms),
+                            'cps': float(cps),
+                        },
+                    )
                     resp = HttpResponse('', status=429)
                     resp.headers['Retry-After'] = str(muted4 or int(getattr(settings, 'SPEED_SPAM_TTL', 10)))
                     return resp
@@ -693,31 +780,68 @@ def chat_view(request, chatroom_name='public-chat'):
                     threshold=int(getattr(settings, 'CHAT_ABUSE_STRIKE_THRESHOLD', 5)),
                     mute_seconds=int(getattr(settings, 'CHAT_ABUSE_MUTE_SECONDS', 60)),
                 )
+                _log_blocked_message_event(
+                    user=request.user,
+                    chat_group=chat_group,
+                    scope='fast_long_msg',
+                    status_code=429,
+                    retry_after=int(muted5 or fast_retry),
+                    auto_muted_seconds=int(muted5 or 0),
+                    text=raw_body,
+                )
                 resp = HttpResponse('', status=429)
                 resp.headers['Retry-After'] = str(muted5 or fast_retry)
                 return resp
 
         # Rate limit message sends (HTMX path).
-        rl_limit = int(getattr(settings, 'CHAT_MSG_RATE_LIMIT', 8))
-        rl_period = int(getattr(settings, 'CHAT_MSG_RATE_PERIOD', 10))
-        rl_key = make_key('chat_msg', chat_group.group_name, request.user.id)
-        rl = check_rate_limit(rl_key, limit=rl_limit, period_seconds=rl_period)
-        if not rl.allowed:
-            # Repeated violations -> auto-mute/cooldown
-            ua_missing = 1 if not (request.META.get('HTTP_USER_AGENT') or '').strip() else 0
-            weight = 2 if ua_missing else 1
-            _, muted = record_abuse_violation(
-                scope='chat_send',
-                user_id=request.user.id,
-                room=chat_group.group_name,
-                window_seconds=int(getattr(settings, 'CHAT_ABUSE_WINDOW', 600)),
-                threshold=int(getattr(settings, 'CHAT_ABUSE_STRIKE_THRESHOLD', 5)),
-                mute_seconds=int(getattr(settings, 'CHAT_ABUSE_MUTE_SECONDS', 60)),
-                weight=weight,
-            )
-            resp = HttpResponse('', status=429)
-            resp.headers['Retry-After'] = str(muted or rl.retry_after)
-            return resp
+        # Burst spam: 5 messages within 3 seconds -> 10 seconds cooldown.
+        burst_limit = int(getattr(settings, 'CHAT_BURST_MSG_LIMIT', 5))
+        burst_period = int(getattr(settings, 'CHAT_BURST_MSG_PERIOD', 3))
+        burst_cooldown = int(getattr(settings, 'CHAT_BURST_COOLDOWN_SECONDS', 10))
+        burst_key = make_key('chat_burst', chat_group.group_name, request.user.id)
+        burst = check_rate_limit(burst_key, limit=burst_limit, period_seconds=burst_period)
+        burst_count = int(getattr(burst, 'count', 0) or 0)
+        burst_should_purge = burst_count >= max(1, int(burst_limit))
+        if burst_should_purge:
+            # Cooldown is a simple short mute; doesn't count as a "strike".
+            try:
+                set_muted(request.user.id, burst_cooldown)
+            except Exception:
+                pass
+
+        if not burst_should_purge:
+            rl_limit = int(getattr(settings, 'CHAT_MSG_RATE_LIMIT', 8))
+            rl_period = int(getattr(settings, 'CHAT_MSG_RATE_PERIOD', 10))
+            rl_key = make_key('chat_msg', chat_group.group_name, request.user.id)
+            rl = check_rate_limit(rl_key, limit=rl_limit, period_seconds=rl_period)
+            if not rl.allowed:
+                # Repeated violations -> auto-mute/cooldown
+                ua_missing = 1 if not (request.META.get('HTTP_USER_AGENT') or '').strip() else 0
+                weight = 2 if ua_missing else 1
+                _, muted = record_abuse_violation(
+                    scope='chat_send',
+                    user_id=request.user.id,
+                    room=chat_group.group_name,
+                    window_seconds=int(getattr(settings, 'CHAT_ABUSE_WINDOW', 600)),
+                    threshold=int(getattr(settings, 'CHAT_ABUSE_STRIKE_THRESHOLD', 5)),
+                    mute_seconds=int(getattr(settings, 'CHAT_ABUSE_MUTE_SECONDS', 60)),
+                    weight=weight,
+                )
+                resp = HttpResponse('', status=429)
+                resp.headers['Retry-After'] = str(muted or rl.retry_after)
+                _log_blocked_message_event(
+                    user=request.user,
+                    chat_group=chat_group,
+                    scope='chat_send',
+                    status_code=429,
+                    retry_after=int(muted or rl.retry_after),
+                    auto_muted_seconds=int(muted or 0),
+                    text=(request.POST.get('body') or ''),
+                    meta={
+                        'ua_missing': int(ua_missing),
+                    },
+                )
+                return resp
 
         # AI moderation (Gemini): run after cheap anti-spam checks but before saving.
         # Default is OFF for performance unless explicitly enabled.
@@ -804,6 +928,21 @@ def chat_view(request, chatroom_name='public-chat'):
                 # HTMX event for UI feedback
                 reason = (decision.reason or 'Message blocked by moderation.')
                 resp.headers['HX-Trigger'] = json.dumps({'moderationBlocked': {'reason': reason}})
+
+                _log_blocked_message_event(
+                    user=request.user,
+                    chat_group=chat_group,
+                    scope='ai_block',
+                    status_code=int(getattr(resp, 'status_code', 0) or 0),
+                    retry_after=int(auto_muted or 0),
+                    auto_muted_seconds=int(auto_muted or 0),
+                    text=raw_body,
+                    meta={
+                        'categories': list(decision.categories or []),
+                        'severity': int(decision.severity or 0),
+                        'confidence': float(decision.confidence or 0.0),
+                    },
+                )
                 return resp
 
             if action == 'flag':
@@ -835,6 +974,57 @@ def chat_view(request, chatroom_name='public-chat'):
                     if reply_to:
                         message.reply_to = reply_to
             message.save()
+
+            if burst_should_purge:
+                deleted_ids = []
+                try:
+                    cutoff = timezone.now() - timedelta(seconds=max(1, int(burst_period)))
+                    deleted_ids = list(
+                        GroupMessage.objects
+                        .filter(group=chat_group, author=request.user, created__gte=cutoff)
+                        .order_by('-created')
+                        .values_list('id', flat=True)[:50]
+                    )
+                    if deleted_ids:
+                        GroupMessage.objects.filter(id__in=deleted_ids, group=chat_group, author=request.user).delete()
+
+                        # Realtime: remove from all connected clients (including sender).
+                        try:
+                            channel_layer = get_channel_layer()
+                            for mid in deleted_ids:
+                                async_to_sync(channel_layer.group_send)(
+                                    chatroom_channel_group_name(chat_group),
+                                    {
+                                        'type': 'message_delete_handler',
+                                        'message_id': int(mid),
+                                    },
+                                )
+                        except Exception:
+                            pass
+                except Exception:
+                    deleted_ids = []
+
+                _log_blocked_message_event(
+                    user=request.user,
+                    chat_group=chat_group,
+                    scope='chat_send',
+                    status_code=429,
+                    retry_after=int(burst_cooldown),
+                    auto_muted_seconds=int(burst_cooldown),
+                    text=(raw_body or ''),
+                    meta={
+                        'reason': 'burst',
+                        'limit': int(burst_limit),
+                        'period_seconds': int(burst_period),
+                        'cooldown_seconds': int(burst_cooldown),
+                        'count': int(burst_count),
+                        'deleted_count': int(len(deleted_ids or [])),
+                    },
+                )
+
+                resp = HttpResponse('', status=429)
+                resp.headers['Retry-After'] = str(burst_cooldown)
+                return resp
 
             # Retention: keep only the newest messages per room (best-effort)
             try:
@@ -1784,13 +1974,15 @@ def message_react_toggle(request, message_id: int):
     if chat_group.groupchat_name and request.user not in chat_group.members.all():
         raise Http404()
 
-    reaction, created = MessageReaction.objects.get_or_create(
-        message=message,
-        user=request.user,
-        emoji=emoji,
-    )
-    if not created:
-        reaction.delete()
+    # Only allow one reaction per user per message.
+    # - If user taps the same emoji again: remove (toggle off)
+    # - If user picks a different emoji: replace previous reaction with the new emoji
+    qs = MessageReaction.objects.filter(message=message, user=request.user)
+    if qs.filter(emoji=emoji).exists():
+        qs.filter(emoji=emoji).delete()
+    else:
+        qs.delete()
+        MessageReaction.objects.create(message=message, user=request.user, emoji=emoji)
 
     channel_layer = get_channel_layer()
     async_to_sync(channel_layer.group_send)(
@@ -1956,6 +2148,331 @@ def admin_report_update_status_view(request, report_id: int):
     report.save(update_fields=['status', 'handled_by', 'handled_at', 'resolution_note'])
     messages.success(request, f'Updated report #{report.id}')
     return redirect('admin-reports')
+
+
+@login_required
+def admin_support_enquiries_view(request):
+    if not request.user.is_staff:
+        raise Http404()
+
+    status = (request.GET.get('status') or '').strip().lower()
+    qs = SupportEnquiry.objects.select_related('user')
+    if status in {SupportEnquiry.STATUS_OPEN, SupportEnquiry.STATUS_RESOLVED}:
+        qs = qs.filter(status=status)
+
+    enquiries = qs[:200]
+    open_count = SupportEnquiry.objects.filter(status=SupportEnquiry.STATUS_OPEN).count()
+    resolved_count = SupportEnquiry.objects.filter(status=SupportEnquiry.STATUS_RESOLVED).count()
+
+    return render(request, 'a_rtchat/admin_support_enquiries.html', {
+        'enquiries': enquiries,
+        'status': status,
+        'open_count': int(open_count or 0),
+        'resolved_count': int(resolved_count or 0),
+    })
+
+
+@login_required
+def admin_support_enquiry_update_status_view(request, enquiry_id: int):
+    if request.method != 'POST':
+        raise Http404()
+    if not request.user.is_staff:
+        raise Http404()
+
+    enquiry = get_object_or_404(SupportEnquiry, pk=enquiry_id)
+    new_status = (request.POST.get('status') or '').strip().lower()
+    if new_status not in {SupportEnquiry.STATUS_OPEN, SupportEnquiry.STATUS_RESOLVED}:
+        messages.error(request, 'Invalid status')
+        return redirect('admin-support-enquiries')
+
+    enquiry.status = new_status
+    note = (request.POST.get('note') or '').strip()
+    enquiry.admin_note = note
+    enquiry.save(update_fields=['status', 'admin_note'])
+
+    messages.success(request, f'Updated enquiry #{enquiry.id}')
+    status = (request.POST.get('next_status') or '').strip().lower()
+    if status in {SupportEnquiry.STATUS_OPEN, SupportEnquiry.STATUS_RESOLVED}:
+        return redirect(f"{reverse('admin-support-enquiries')}?status={status}")
+    return redirect('admin-support-enquiries')
+
+
+def _today_localdate():
+    try:
+        return timezone.localdate()
+    except Exception:
+        return timezone.now().date()
+
+
+def _global_online_user_count() -> int:
+    """Best-effort global online users count.
+
+    Presence is driven by websockets updating ChatGroup.users_online.
+    """
+    try:
+        through = ChatGroup.users_online.through
+        return int(through.objects.values('user_id').distinct().count())
+    except Exception:
+        try:
+            User = get_user_model()
+            return int(User.objects.filter(online_in_groups__isnull=False).distinct().count())
+        except Exception:
+            return 0
+
+
+def _get_and_update_peak_today(current: int) -> int:
+    today = _today_localdate().isoformat()
+    key = f"admin:online_peak:{today}"
+    try:
+        prev = int(cache.get(key) or 0)
+    except Exception:
+        prev = 0
+    peak = max(prev, int(current or 0))
+    try:
+        cache.set(key, peak, timeout=60 * 60 * 48)
+    except Exception:
+        pass
+    return peak
+
+
+@login_required
+def admin_analytics_live_view(request):
+    """Lightweight live metrics for polling (staff only)."""
+    if not request.user.is_staff:
+        raise Http404()
+
+    today = _today_localdate()
+    now = timezone.now()
+
+    online_now = _global_online_user_count()
+    peak_today = _get_and_update_peak_today(online_now)
+
+    # Today's counts used for quick refresh without reloading whole page.
+    messages_today = GroupMessage.objects.filter(created__date=today).count()
+    blocked_today = BlockedMessageEvent.objects.filter(created__date=today).count()
+    reports_open = UserReport.objects.filter(status=UserReport.STATUS_OPEN).count()
+    enquiries_open = SupportEnquiry.objects.filter(status=SupportEnquiry.STATUS_OPEN).count()
+
+    return JsonResponse({
+        'ok': True,
+        'ts': now.isoformat(),
+        'online_now': int(online_now),
+        'peak_today': int(peak_today),
+        'messages_today': int(messages_today),
+        'blocked_today': int(blocked_today),
+        'open_reports': int(reports_open),
+        'open_enquiries': int(enquiries_open),
+    })
+
+
+@login_required
+def admin_analytics_view(request):
+    if not request.user.is_staff:
+        raise Http404()
+
+    User = get_user_model()
+    today = _today_localdate()
+    now = timezone.now()
+    last_24h = now - timedelta(hours=24)
+    last_7d = now - timedelta(days=7)
+
+    # ---- Summary cards ----
+    total_users = User.objects.count()
+    new_users_24h = User.objects.filter(date_joined__gte=last_24h).count()
+
+    online_now = _global_online_user_count()
+    peak_today = _get_and_update_peak_today(online_now)
+
+    messages_today = GroupMessage.objects.filter(created__date=today).count()
+    messages_7d = GroupMessage.objects.filter(created__gte=last_7d).count()
+
+    blocked_today = BlockedMessageEvent.objects.filter(created__date=today).count()
+    yesterday = today - timedelta(days=1)
+    blocked_yesterday = BlockedMessageEvent.objects.filter(created__date=yesterday).count()
+    blocked_pct_vs_yesterday = None
+    try:
+        if blocked_yesterday > 0:
+            blocked_pct_vs_yesterday = round(((blocked_today - blocked_yesterday) / blocked_yesterday) * 100, 1)
+        elif blocked_today > 0:
+            blocked_pct_vs_yesterday = 100.0
+        else:
+            blocked_pct_vs_yesterday = 0.0
+    except Exception:
+        blocked_pct_vs_yesterday = None
+
+    # ---- Activity graph (daily last 7 days) ----
+    start_day = today - timedelta(days=6)
+    daily = (
+        GroupMessage.objects
+        .filter(created__date__gte=start_day)
+        .annotate(day=TruncDate('created'))
+        .values('day')
+        .annotate(count=Count('id'))
+        .order_by('day')
+    )
+    daily_map = {row['day']: int(row['count']) for row in daily}
+    daily_labels = []
+    daily_counts = []
+    for i in range(7):
+        d = start_day + timedelta(days=i)
+        daily_labels.append(d.strftime('%b %d'))
+        daily_counts.append(int(daily_map.get(d, 0)))
+
+    # ---- Message quality split (last 7d, best-effort) ----
+    # Note: AI moderation can be disabled; in that case allow/flag will be 0.
+    allow_7d = ModerationEvent.objects.filter(created__gte=last_7d, action='allow', message__isnull=False).count()
+    flag_7d = ModerationEvent.objects.filter(created__gte=last_7d, action='flag', message__isnull=False).count()
+    block_ai_7d = ModerationEvent.objects.filter(created__gte=last_7d, action='block').count()
+    block_other_7d = BlockedMessageEvent.objects.filter(created__gte=last_7d).exclude(scope='ai_block').count()
+    blocked_total_7d = int(block_ai_7d + block_other_7d)
+
+    quality_total = int(allow_7d + flag_7d + blocked_total_7d)
+    quality = {
+        'useful': int(allow_7d),
+        'low': int(flag_7d),
+        'spam': int(blocked_total_7d),
+        'total': int(quality_total),
+    }
+
+    # ---- Top lists ----
+    most_active = list(
+        GroupMessage.objects
+        .filter(created__gte=last_7d)
+        .values('author_id', 'author__username')
+        .annotate(messages=Count('id'))
+        .order_by('-messages')[:10]
+    )
+    active_user_ids = [row['author_id'] for row in most_active]
+
+    quality_by_user = {
+        row['user_id']: row
+        for row in (
+            ModerationEvent.objects
+            .filter(created__gte=last_7d, user_id__in=active_user_ids, message__isnull=False)
+            .values('user_id')
+            .annotate(
+                allow=Count('id', filter=Q(action='allow')),
+                flag=Count('id', filter=Q(action='flag')),
+            )
+        )
+    }
+
+    for row in most_active:
+        qrow = quality_by_user.get(row['author_id'])
+        allow_c = int((qrow or {}).get('allow') or 0)
+        flag_c = int((qrow or {}).get('flag') or 0)
+        denom = allow_c + flag_c
+        row['quality_score'] = round((allow_c / denom) * 100, 1) if denom > 0 else None
+
+    top_spammers = list(
+        BlockedMessageEvent.objects
+        .filter(created__gte=last_7d)
+        .values('user_id', 'user__username')
+        .annotate(spam=Count('id'))
+        .order_by('-spam')[:10]
+    )
+
+    spam_user_ids = [row['user_id'] for row in top_spammers]
+    blocked_profiles = {
+        p['user_id']: bool(p['chat_blocked'])
+        for p in Profile.objects.filter(user_id__in=spam_user_ids).values('user_id', 'chat_blocked')
+    }
+
+    for row in top_spammers:
+        row['auto_action'] = 'Blocked from chat' if blocked_profiles.get(row['user_id']) else '—'
+
+    # ---- Room stats (today) ----
+    msgs_by_room = {
+        row['group_id']: row
+        for row in (
+            GroupMessage.objects
+            .filter(created__date=today)
+            .values('group_id')
+            .annotate(messages=Count('id'), active_users=Count('author_id', distinct=True))
+        )
+    }
+
+    blocked_by_room = {
+        row['room_id']: int(row['blocked'])
+        for row in (
+            BlockedMessageEvent.objects
+            .filter(created__date=today)
+            .values('room_id')
+            .annotate(blocked=Count('id'))
+        )
+    }
+    blocked_ai_by_room = {
+        row['room_id']: int(row['blocked'])
+        for row in (
+            ModerationEvent.objects
+            .filter(created__date=today, action='block')
+            .values('room_id')
+            .annotate(blocked=Count('id'))
+        )
+    }
+
+    rooms = list(
+        ChatGroup.objects
+        .exclude(group_name='online-status')
+        .order_by('groupchat_name', 'group_name')
+    )
+
+    room_rows = []
+    for room in rooms:
+        m = msgs_by_room.get(room.id, {})
+        msg_c = int(m.get('messages') or 0)
+        act_u = int(m.get('active_users') or 0)
+        blocked_c = int(blocked_by_room.get(room.id, 0) + blocked_ai_by_room.get(room.id, 0))
+        denom = msg_c + blocked_c
+        spam_ratio = round((blocked_c / denom) * 100, 1) if denom > 0 else 0.0
+
+        display = getattr(room, 'groupchat_name', None) or getattr(room, 'code_room_name', None) or getattr(room, 'group_name', '')
+        room_rows.append({
+            'name': display,
+            'group_name': getattr(room, 'group_name', ''),
+            'messages': msg_c,
+            'active_users': act_u,
+            'blocked': blocked_c,
+            'spam_ratio': spam_ratio,
+        })
+
+    # Sort rooms: most messages today first, then blocked.
+    room_rows.sort(key=lambda r: (r['messages'], r['blocked']), reverse=True)
+    room_rows = room_rows[:20]
+
+    # ---- Reports & moderation ----
+    reports_today = UserReport.objects.filter(created_at__date=today).count()
+    reports_open = UserReport.objects.filter(status=UserReport.STATUS_OPEN).count()
+    enquiries_today = SupportEnquiry.objects.filter(created_at__date=today).count()
+    enquiries_open = SupportEnquiry.objects.filter(status=SupportEnquiry.STATUS_OPEN).count()
+
+    auto_actions_today = BlockedMessageEvent.objects.filter(created__date=today, auto_muted_seconds__gt=0).count()
+    pending_actions = int(reports_open + enquiries_open)
+
+    context = {
+        'total_users': int(total_users),
+        'new_users_24h': int(new_users_24h),
+        'online_now': int(online_now),
+        'peak_today': int(peak_today),
+        'messages_today': int(messages_today),
+        'messages_7d': int(messages_7d),
+        'blocked_today': int(blocked_today),
+        'blocked_pct_vs_yesterday': blocked_pct_vs_yesterday,
+        'daily_labels_json': json.dumps(daily_labels),
+        'daily_counts_json': json.dumps(daily_counts),
+        'quality_json': json.dumps(quality),
+        'most_active': most_active,
+        'top_spammers': top_spammers,
+        'room_rows': room_rows,
+        'reports_today': int(reports_today),
+        'enquiries_today': int(enquiries_today),
+        'auto_actions_today': int(auto_actions_today),
+        'pending_actions': int(pending_actions),
+        'reports_open': int(reports_open),
+        'enquiries_open': int(enquiries_open),
+    }
+
+    return render(request, 'a_rtchat/admin_analytics.html', context)
 
 
 @login_required

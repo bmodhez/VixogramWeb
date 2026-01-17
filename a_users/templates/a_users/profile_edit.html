@@ -61,7 +61,7 @@
 
                                         <div class="mx-auto w-[min(20rem,85vw)] max-w-full">
                                             <div id="avatar_crop_area" class="relative w-[min(20rem,85vw)] h-[min(20rem,85vw)] max-w-full bg-gray-900/40 border border-gray-700 rounded-2xl overflow-hidden touch-none select-none">
-                                                        <img id="avatar_crop_img" alt="Crop preview" class="absolute left-1/2 top-1/2 will-change-transform pointer-events-none" />
+                                                        <img id="avatar_crop_img" alt="Crop preview" class="absolute left-1/2 top-1/2 will-change-transform pointer-events-none max-w-none max-h-none" />
                                                         <div aria-hidden="true" class="absolute inset-0 ring-1 ring-white/10"></div>
                                                 </div>
                                         </div>
@@ -211,9 +211,13 @@
 
         try {
             const im = await loadImageFromFile(file);
-            resetStateForImage(im);
             open();
-            requestAnimationFrame(syncCropSize);
+            // Wait for the modal to be visible so cropArea has a real size.
+            requestAnimationFrame(() => {
+                resetStateForImage(im);
+                syncCropSize();
+                setTimeout(syncCropSize, 50);
+            });
         } catch {
             clearSelection();
         }

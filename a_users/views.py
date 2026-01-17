@@ -13,7 +13,7 @@ from django.http import JsonResponse
 from a_users.models import Follow
 from a_users.models import UserReport
 from a_users.models import SupportEnquiry
-from a_users.badges import VERIFIED_FOLLOWERS_THRESHOLD
+from a_users.badges import VERIFIED_FOLLOWERS_THRESHOLD, get_verified_user_ids
 
 try:
     from a_rtchat.models import Notification
@@ -207,6 +207,7 @@ def profile_followers_partial_view(request, username: str):
             'items': [],
             'total_count': 0,
             'is_full': False,
+            'verified_user_ids': set(),
         })
 
     is_full = str(request.GET.get('full') or '') in {'1', 'true', 'True', 'yes'}
@@ -220,6 +221,9 @@ def profile_followers_partial_view(request, username: str):
     total_count = qs.count()
     items = list(qs[:(total_count if is_full else 5)])
 
+    follower_ids = [getattr(rel.follower, 'id', None) for rel in items]
+    verified_user_ids = get_verified_user_ids(follower_ids)
+
     return render(request, 'a_users/partials/follow_list_modal.html', {
         'profile_user': profile_user,
         'kind': 'followers',
@@ -228,6 +232,7 @@ def profile_followers_partial_view(request, username: str):
         'items': items,
         'total_count': total_count,
         'is_full': is_full,
+        'verified_user_ids': verified_user_ids,
     })
 
 
@@ -244,6 +249,7 @@ def profile_following_partial_view(request, username: str):
             'items': [],
             'total_count': 0,
             'is_full': False,
+            'verified_user_ids': set(),
         })
 
     is_full = str(request.GET.get('full') or '') in {'1', 'true', 'True', 'yes'}
@@ -257,6 +263,9 @@ def profile_following_partial_view(request, username: str):
     total_count = qs.count()
     items = list(qs[:(total_count if is_full else 5)])
 
+    following_ids = [getattr(rel.following, 'id', None) for rel in items]
+    verified_user_ids = get_verified_user_ids(following_ids)
+
     return render(request, 'a_users/partials/follow_list_modal.html', {
         'profile_user': profile_user,
         'kind': 'following',
@@ -265,6 +274,7 @@ def profile_following_partial_view(request, username: str):
         'items': items,
         'total_count': total_count,
         'is_full': is_full,
+        'verified_user_ids': verified_user_ids,
     })
 
 

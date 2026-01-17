@@ -174,6 +174,75 @@
         applyChatBlockedUI(!!cfg.chatBlocked, { allowPopup: false });
     }
 
+    // --- Mobile chat message actions (swipe + long-press) ---
+    function __isMobileChatViewport() {
+        try {
+            return !window.matchMedia('(min-width: 640px)').matches;
+        } catch {
+            return true;
+        }
+    }
+
+    function closeAllMessageActionBars(exceptMsgEl) {
+        const open = document.querySelectorAll('.vixo-msg.vixo-actions-open');
+        open.forEach((el) => {
+            if (exceptMsgEl && el === exceptMsgEl) return;
+            el.classList.remove('vixo-actions-open');
+        });
+    }
+
+    function openMessageActionBar(msgEl) {
+        if (!msgEl) return;
+        closeAllMessageActionBars(msgEl);
+        msgEl.classList.add('vixo-actions-open');
+    }
+
+    // Swipe left to reply; long-press to reveal reply/+ / ⋮
+    let touchStartX = 0, touchStartY = 0, touchStartTime = 0, touchTimer = null;
+    document.addEventListener('touchstart', function(e) {
+        const msg = e.target.closest('.vixo-msg');
+        if (!msg) return;
+        if (e.touches.length !== 1) return;
+        touchStartX = e.touches[0].clientX;
+        touchStartY = e.touches[0].clientY;
+        touchStartTime = Date.now();
+        touchTimer = setTimeout(() => {
+            if (!__isMobileChatViewport()) return;
+            try { closeAllReactionPickers(); } catch {}
+            try { closeAllMessageMenus(); } catch {}
+            openMessageActionBar(msg);
+        }, 520);
+    }, { passive: true });
+
+    document.addEventListener('touchend', function(e) {
+        if (touchTimer) clearTimeout(touchTimer);
+        const msg = e.target.closest('.vixo-msg');
+        if (!msg) return;
+        if (e.changedTouches.length !== 1) return;
+        const dx = e.changedTouches[0].clientX - touchStartX;
+        const dy = e.changedTouches[0].clientY - touchStartY;
+        const dt = Date.now() - touchStartTime;
+
+        if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy) && dx < 0 && dt < 400) {
+            closeAllMessageActionBars();
+            const replyBtn = msg.querySelector('[data-reply-button]');
+            if (replyBtn) replyBtn.click();
+        }
+    }, { passive: true });
+
+    document.addEventListener('touchmove', function() {
+        if (touchTimer) clearTimeout(touchTimer);
+    }, { passive: true });
+
+    document.addEventListener('click', function (e) {
+        if (!__isMobileChatViewport()) return;
+        const keep = e.target && e.target.closest
+            ? e.target.closest('.vixo-msg.vixo-actions-open [data-msg-actions], .vixo-msg.vixo-actions-open [data-message-menu]')
+            : null;
+        if (keep) return;
+        closeAllMessageActionBars();
+    }, true);
+
     (function initChatEmojiPicker() {
         const btn = document.getElementById('emoji_btn');
         const panel = document.getElementById('emoji_panel');
@@ -1337,6 +1406,22 @@
         });
     }
 
+    function revealChatContainer() {
+        const c = document.getElementById('chat_container');
+        if (c) c.classList.remove('vixo-chat-init-hidden');
+    }
+
+    function hardScrollToBottom(container) {
+        const c = container || document.getElementById('chat_container');
+        if (!c) return;
+        try {
+            const targetTop = Math.max(0, c.scrollHeight - c.clientHeight);
+            c.scrollTop = targetTop;
+        } catch {
+            // ignore
+        }
+    }
+
     function safeScrollToBottom() {
         if (typeof scrollToBottom === 'function') scrollToBottom();
     }
@@ -1344,7 +1429,9 @@
     function forceScrollToBottomNow() {
         if (typeof scrollToBottom === 'function') {
             scrollToBottom({ force: true, behavior: 'auto' });
+            return;
         }
+        hardScrollToBottom();
     }
 
     function updateLastIdFromDom() {
@@ -2292,18 +2379,27 @@
         if (window.__didInitialChatScroll) return;
         window.__didInitialChatScroll = true;
 
+        // Hide chat until we've snapped to bottom to avoid the “starts at top then scrolls down” effect.
+        // (Visibility is controlled via the template-added class.)
+        hardScrollToBottom();
+        revealChatContainer();
+
         // Run a few times to handle layout/avatars loading.
         try {
             requestAnimationFrame(() => {
                 forceScrollToBottomNow();
-                requestAnimationFrame(() => forceScrollToBottomNow());
+                revealChatContainer();
+                requestAnimationFrame(() => {
+                    forceScrollToBottomNow();
+                    revealChatContainer();
+                });
             });
         } catch {
             // ignore
         }
-        setTimeout(forceScrollToBottomNow, 0);
-        setTimeout(forceScrollToBottomNow, 120);
-        setTimeout(forceScrollToBottomNow, 320);
+        setTimeout(() => { forceScrollToBottomNow(); revealChatContainer(); }, 0);
+        setTimeout(() => { forceScrollToBottomNow(); revealChatContainer(); }, 120);
+        setTimeout(() => { forceScrollToBottomNow(); revealChatContainer(); }, 320);
     })();
 
     setInterval(poll, 1200);

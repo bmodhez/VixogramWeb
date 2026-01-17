@@ -3,8 +3,23 @@
 /* Smooth scrolling site-wide (anchors/programmatic scroll). */
 html { scroll-behavior: smooth; }
 
-/* Smooth scrolling for chat window */
-#chat_container { scroll-behavior: smooth; }
+/* Chat container should snap instantly (JS provides any desired animation). */
+#chat_container { scroll-behavior: auto; }
+
+/* Hide chat pane until initial snap-to-bottom completes. */
+.vixo-chat-init-hidden { visibility: hidden; }
+
+/* Mobile chat UX: hide per-message action icons (reply/+ / ⋮) unless the message is long-pressed. */
+@media (max-width: 639px) {
+  .vixo-msg [data-msg-actions] {
+    opacity: 0;
+    pointer-events: none;
+  }
+  .vixo-msg.vixo-actions-open [data-msg-actions] {
+    opacity: 1 !important;
+    pointer-events: auto !important;
+  }
+}
 
 /* Make linkified URLs clearly clickable in chat bubbles */
 .chat-message-body a { text-decoration: underline; cursor: pointer; }
@@ -45,8 +60,8 @@ body {
 /* Smooth scrolling site-wide (anchors/programmatic scroll). */
 html { scroll-behavior: smooth; }
 
-/* Smooth scrolling for chat window */
-#chat_container { scroll-behavior: smooth; }
+/* Chat container should snap instantly (JS provides any desired animation). */
+#chat_container { scroll-behavior: auto; }
 
 /* Make linkified URLs clearly clickable in chat bubbles */
 .chat-message-body a { text-decoration: underline; cursor: pointer; }
@@ -94,6 +109,26 @@ body {
   border-radius: 0.5rem;
   padding: 0.75rem 1rem;
   outline: none;
+}
+
+/* Allauth change password page field tweaks. */
+#account-password-change-page input[type="password"] {
+  width: 100%;
+  background-color: rgba(17, 24, 39, 0.35); /* gray-900/35 */
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 0.75rem; /* rounded-xl */
+  padding: 0.75rem 1rem;
+  outline: none;
+}
+
+#account-password-change-page input[type="password"]::placeholder {
+  color: #9ca3af; /* gray-400 */
+}
+
+#account-password-change-page input[type="password"]:focus {
+  border-color: #10b981; /* emerald-500 */
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.25);
 }
 
 #account-email-page #id_email::placeholder {

@@ -3,8 +3,23 @@
 /* Smooth scrolling site-wide (anchors/programmatic scroll). */
 html { scroll-behavior: smooth; }
 
-/* Smooth scrolling for chat window */
-#chat_container { scroll-behavior: smooth; }
+/* Chat container should snap instantly (JS provides any desired animation). */
+#chat_container { scroll-behavior: auto; }
+
+/* Hide chat pane until initial snap-to-bottom completes. */
+.vixo-chat-init-hidden { visibility: hidden; }
+
+/* Mobile chat UX: hide per-message action icons (reply/+ / ⋮) unless the message is long-pressed. */
+@media (max-width: 639px) {
+  .vixo-msg [data-msg-actions] {
+    opacity: 0;
+    pointer-events: none;
+  }
+  .vixo-msg.vixo-actions-open [data-msg-actions] {
+    opacity: 1 !important;
+    pointer-events: auto !important;
+  }
+}
 
 /* Make linkified URLs clearly clickable in chat bubbles */
 .chat-message-body a { text-decoration: underline; cursor: pointer; }
@@ -45,8 +60,8 @@ body {
 /* Smooth scrolling site-wide (anchors/programmatic scroll). */
 html { scroll-behavior: smooth; }
 
-/* Smooth scrolling for chat window */
-#chat_container { scroll-behavior: smooth; }
+/* Chat container should snap instantly (JS provides any desired animation). */
+#chat_container { scroll-behavior: auto; }
 
 /* Make linkified URLs clearly clickable in chat bubbles */
 .chat-message-body a { text-decoration: underline; cursor: pointer; }
@@ -94,6 +109,26 @@ body {
   border-radius: 0.5rem;
   padding: 0.75rem 1rem;
   outline: none;
+}
+
+/* Allauth change password page field tweaks. */
+#account-password-change-page input[type="password"] {
+  width: 100%;
+  background-color: rgba(17, 24, 39, 0.35); /* gray-900/35 */
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 0.75rem; /* rounded-xl */
+  padding: 0.75rem 1rem;
+  outline: none;
+}
+
+#account-password-change-page input[type="password"]::placeholder {
+  color: #9ca3af; /* gray-400 */
+}
+
+#account-password-change-page input[type="password"]:focus {
+  border-color: #10b981; /* emerald-500 */
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.25);
 }
 
 #account-email-page #id_email::placeholder {
@@ -164,6 +199,14 @@ html { scrollbar-width: thin; scrollbar-color: rgb(16 185 129) transparent; }
     transition: none;
     transform: none;
   }
+}
+
+/* Decorative chat background (dark mode/default) */
+.vixo-chat-bg {
+  background-image: linear-gradient(rgba(2, 6, 23, 0.78), rgba(2, 6, 23, 0.78)), url('../chatbg.jpeg');
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
 }
 
 /* Light theme (applied by adding .theme-light on <html>)
@@ -249,4 +292,43 @@ html { scrollbar-width: thin; scrollbar-color: rgb(16 185 129) transparent; }
 .theme-light .placeholder-gray-400::placeholder { color: rgb(100 116 139) !important; }
 
 /* Decorative chat background: too heavy on light, so disable */
-.theme-light .vixo-chat-bg { background-image: none !important; }
+.theme-light .vixo-chat-bg {
+  background-image:
+    linear-gradient(rgba(248, 250, 252, 0.92), rgba(248, 250, 252, 0.92)),
+    url('../lightbg.jpeg') !important;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+/* Light-mode surfaces (chat/nav panels) */
+.theme-light .vixo-topbar {
+  /* Not pure white: add a subtle brand-tinted surface so the logo pops. */
+  background:
+    radial-gradient(900px circle at 18% 10%, rgba(14, 165, 233, 0.10), transparent 55%),
+    radial-gradient(900px circle at 82% 30%, rgba(99, 102, 241, 0.08), transparent 58%),
+    linear-gradient(to bottom, rgba(186, 230, 253, 0.78), rgba(241, 245, 249, 0.96)) !important;
+  border-bottom-color: rgb(186 230 253) !important; /* sky-200 */
+  box-shadow: 0 10px 28px rgba(2, 6, 23, 0.06);
+}
+
+/* Light-mode logo contrast */
+.theme-light .vixo-topbar .vixo-brand {
+  padding: 6px 10px;
+  border-radius: 14px;
+  background: rgba(2, 6, 23, 0.06);
+  border: 1px solid rgba(2, 6, 23, 0.10);
+  box-shadow: 0 10px 22px rgba(2, 6, 23, 0.08);
+}
+
+.theme-light .vixo-topbar .vixo-logo {
+  filter:
+    drop-shadow(0 2px 6px rgba(2, 6, 23, 0.40))
+    drop-shadow(0 0px 1px rgba(255, 255, 255, 0.45));
+}
+
+.theme-light .vixo-chat-surface {
+  /* Darker light-mode panels (sidebar/header/composer) */
+  background: linear-gradient(to bottom, rgba(226, 232, 240, 0.92), rgba(241, 245, 249, 0.92)) !important;
+  border-color: rgb(203 213 225) !important;
+}

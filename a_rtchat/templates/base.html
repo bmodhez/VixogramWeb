@@ -23,10 +23,10 @@
 <body class="min-h-screen flex flex-col text-white antialiased tracking-tight bg-gradient-to-b from-gray-950 via-gray-900 to-gray-950">
     <audio id="notif_sound" preload="auto" class="hidden" src="{% static 'notification.mp3' %}"></audio>
     <audio id="incoming_sound" preload="auto" class="hidden" src="{% static 'incoming.wav' %}"></audio>
-    <nav class="sticky top-0 z-50 bg-gray-900/80 backdrop-blur border-b border-gray-800">
+    <nav class="vixo-topbar sticky top-0 z-50 bg-gray-900/80 backdrop-blur border-b border-gray-800">
         <div class="w-full max-w-7xl mx-auto px-4 sm:px-6 py-2 flex flex-wrap items-center justify-between gap-3">
-            <a href="/" class="inline-flex items-center gap-2 hover:opacity-95 transition-all duration-200 ease-out hover:-translate-y-0.5 active:translate-y-0">
-                <img src="{% static 'vixologo.png' %}" alt="Vixogram" class="h-10 sm:h-12 w-auto max-w-none object-contain object-left" />
+            <a href="/" class="vixo-brand inline-flex items-center gap-2 hover:opacity-95 transition-all duration-200 ease-out hover:-translate-y-0.5 active:translate-y-0">
+                <img src="{% static 'vixologo.png' %}" alt="Vixogram" class="vixo-logo h-10 sm:h-12 w-auto max-w-none object-contain object-left" />
             </a>
 
             {% if user.is_authenticated %}
@@ -59,7 +59,7 @@
                                 </span>
                             </button>
 
-                            <div id="contact_dropdown" class="hidden absolute right-0 mt-2 w-[min(20rem,calc(100vw-2rem))] rounded-2xl border border-gray-800 bg-gray-900/95 shadow-2xl shadow-black/30 overflow-hidden" role="menu">
+                            <div id="contact_dropdown" class="hidden fixed left-1/2 -translate-x-1/2 top-16 w-[min(20rem,calc(100vw-2rem))] sm:absolute sm:left-auto sm:translate-x-0 sm:top-auto sm:right-0 sm:mt-2 rounded-2xl border border-gray-800 bg-gray-900/95 shadow-2xl shadow-black/30 overflow-hidden" role="menu">
                                 <div class="px-4 py-3 border-b border-gray-800 flex items-center justify-between">
                                     <div class="text-sm font-semibold text-white">Contact</div>
                                     <button type="button" id="contact_close" class="text-gray-300 hover:text-white transition-transform duration-200 ease-out hover:scale-110 active:scale-100">×</button>
@@ -99,7 +99,7 @@
                             <span id="nav_notif_badge" class="hidden absolute -top-1 -right-1 min-w-5 h-5 px-1 rounded-full bg-emerald-500 text-[10px] leading-5 text-center font-bold text-white"></span>
                         </button>
 
-                        <div id="notif_dropdown" class="hidden absolute right-0 mt-2 w-[min(22rem,calc(100vw-2rem))] rounded-2xl border border-gray-800 bg-gray-900/95 shadow-2xl shadow-black/30 overflow-hidden" role="menu">
+                        <div id="notif_dropdown" class="hidden fixed left-1/2 -translate-x-1/2 top-16 w-[min(22rem,calc(100vw-2rem))] sm:absolute sm:left-auto sm:translate-x-0 sm:top-auto sm:right-0 sm:mt-2 rounded-2xl border border-gray-800 bg-gray-900/95 shadow-2xl shadow-black/30 overflow-hidden" role="menu">
                             <div class="px-4 py-3 border-b border-gray-800 flex items-center justify-between">
                                 <div class="text-sm font-semibold text-white">Notifications</div>
                                 <button type="button" id="notif_close" class="text-gray-300 hover:text-white transition-transform duration-200 ease-out hover:scale-110 active:scale-100">×</button>
@@ -122,7 +122,7 @@
                             <span class="hidden sm:inline text-sm text-gray-200 font-semibold">{{ user.username }}</span>
                         </button>
 
-                        <div id="user_menu" class="hidden absolute right-0 mt-2 w-[min(18rem,calc(100vw-2rem))] rounded-2xl border border-gray-800 bg-gray-900/95 shadow-2xl shadow-black/30 overflow-hidden" role="menu">
+                        <div id="user_menu" class="hidden fixed left-1/2 -translate-x-1/2 top-16 w-[min(18rem,calc(100vw-2rem))] sm:absolute sm:left-auto sm:translate-x-0 sm:top-auto sm:right-0 sm:mt-2 rounded-2xl border border-gray-800 bg-gray-900/95 shadow-2xl shadow-black/30 overflow-hidden" role="menu">
                             <a href="{% url 'profile' %}" class="block px-4 py-3 text-sm text-gray-200 hover:bg-gray-800/60 transition-all duration-200 ease-out hover:-translate-y-0.5 active:translate-y-0">
                                 View profile
                             </a>

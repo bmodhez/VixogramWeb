@@ -104,6 +104,80 @@ def _resolve_authenticated_user(scope_user):
         return scope_user
 
 class ChatroomConsumer(WebsocketConsumer):
+    def _room_conn_key(self) -> str:
+        room_id = getattr(self, 'chatroom', None)
+        room_pk = getattr(room_id, 'pk', None)
+        user_id = getattr(getattr(self, 'user', None), 'id', None)
+        return f"rtchat:room:{room_pk}:user:{user_id}:conns"
+
+    def _inc_room_conn(self) -> int:
+        key = self._room_conn_key()
+        try:
+            current = int(cache.get(key) or 0)
+            new_val = current + 1
+            cache.set(key, new_val, timeout=120)
+            return new_val
+        except Exception:
+            try:
+                cache.set(key, 1, timeout=120)
+            except Exception:
+                pass
+            return 1
+
+    def _dec_room_conn(self) -> int:
+        key = self._room_conn_key()
+        try:
+            current = int(cache.get(key) or 0)
+            new_val = max(0, current - 1)
+            if new_val <= 0:
+                cache.delete(key)
+            else:
+                cache.set(key, new_val, timeout=120)
+            return new_val
+        except Exception:
+            try:
+                cache.delete(key)
+            except Exception:
+                pass
+            return 0
+
+    def _touch_room_conn(self) -> None:
+        key = self._room_conn_key()
+        try:
+            current = cache.get(key)
+            if current is None:
+                return
+            cache.set(key, int(current), timeout=120)
+        except Exception:
+            return
+
+    def _cleanup_stale_online_users(self) -> None:
+        """Best-effort cleanup when disconnect events are missed (tab crash/server restart).
+
+        We treat a user as online in a room only if they have a live connection key.
+        """
+        try:
+            room = getattr(self, 'chatroom', None)
+            if not room:
+                return
+            user_ids = list(room.users_online.values_list('id', flat=True))
+        except Exception:
+            return
+
+        stale_ids: list[int] = []
+        for uid in user_ids:
+            try:
+                key = f"rtchat:room:{getattr(room, 'pk', None)}:user:{uid}:conns"
+                if cache.get(key) is None:
+                    stale_ids.append(int(uid))
+            except Exception:
+                continue
+
+        if stale_ids:
+            try:
+                room.users_online.remove(*stale_ids)
+            except Exception:
+                pass
     def connect(self):
         self.user = _resolve_authenticated_user(self.scope.get('user'))
         self.chatroom_name = self.scope['url_route']['kwargs']['chatroom_name']
@@ -161,11 +235,16 @@ class ChatroomConsumer(WebsocketConsumer):
             except Exception:
                 pass
 
-        # add and update online users
+        # add and update online users (connection-counted + TTL to avoid stale "online")
         if getattr(self.user, 'is_authenticated', False):
-            if self.user not in self.chatroom.users_online.all():
-                # ManyToMany expects a real User instance or a pk
-                self.chatroom.users_online.add(self.user.pk)
+            new_count = self._inc_room_conn()
+            if new_count == 1:
+                try:
+                    if self.user not in self.chatroom.users_online.all():
+                        # ManyToMany expects a real User instance or a pk
+                        self.chatroom.users_online.add(self.user.pk)
+                except Exception:
+                    pass
             self.update_online_count()
         
         
@@ -177,14 +256,29 @@ class ChatroomConsumer(WebsocketConsumer):
             )
         # remove and update online users
         if getattr(getattr(self, 'user', None), 'is_authenticated', False) and hasattr(self, 'chatroom'):
-            if self.user in self.chatroom.users_online.all():
-                self.chatroom.users_online.remove(self.user.pk)
-                self.update_online_count() 
+            try:
+                new_count = self._dec_room_conn()
+            except Exception:
+                new_count = 0
+
+            if new_count <= 0:
+                try:
+                    if self.user in self.chatroom.users_online.all():
+                        self.chatroom.users_online.remove(self.user.pk)
+                except Exception:
+                    pass
+            self.update_online_count()
         
     def receive(self, text_data):
         text_data_json = json.loads(text_data)
         if not getattr(self.user, 'is_authenticated', False):
             return
+
+        # Keep the per-room connection TTL alive.
+        try:
+            self._touch_room_conn()
+        except Exception:
+            pass
 
         # Allow blocked users to connect/read, but never allow them to send any events.
         if _is_chat_blocked(self.user):
@@ -195,6 +289,10 @@ class ChatroomConsumer(WebsocketConsumer):
             return
 
         event_type = (text_data_json.get('type') or '').strip().lower()
+
+        # Client heartbeat (keeps online presence accurate).
+        if event_type == 'ping':
+            return
 
         # Read receipts: client can send {type:'read', last_read_id: <int>}.
         if event_type == 'read':
@@ -788,6 +886,12 @@ class ChatroomConsumer(WebsocketConsumer):
         
         
     def update_online_count(self):
+        # Best-effort cleanup to avoid "ghost" online users.
+        try:
+            self._cleanup_stale_online_users()
+        except Exception:
+            pass
+
         online_count = self.chatroom.users_online.count()
         
         event = {
