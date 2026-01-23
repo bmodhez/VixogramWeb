@@ -48,7 +48,7 @@
                                 </span>
                             </button>
 
-                            <div id="contact_dropdown" class="hidden fixed left-1/2 -translate-x-1/2 top-16 w-[min(20rem,calc(100vw-2rem))] sm:absolute sm:left-auto sm:translate-x-0 sm:top-auto sm:right-0 sm:mt-2 rounded-2xl border border-gray-800 bg-gray-900/95 shadow-2xl shadow-black/30 overflow-hidden" role="menu">
+                            <div id="contact_dropdown" class="hidden fixed left-1/2 -translate-x-1/2 top-20 w-[min(20rem,calc(100vw-2rem))] sm:absolute sm:left-auto sm:translate-x-0 sm:top-auto sm:right-0 sm:mt-2 rounded-2xl border border-gray-800 bg-gray-900/95 shadow-2xl shadow-black/30 overflow-hidden" role="menu">
                                 <div class="px-4 py-3 border-b border-gray-800 flex items-center justify-between">
                                     <div class="text-sm font-semibold text-white">Contact</div>
                                     <button type="button" id="contact_close" class="text-gray-300 hover:text-white transition-transform duration-200 ease-out hover:scale-110 active:scale-100">×</button>
@@ -110,7 +110,7 @@
                             <span id="nav_notif_badge" class="hidden absolute -top-1 -right-1 min-w-5 h-5 px-1 rounded-full bg-emerald-500 text-[10px] leading-5 text-center font-bold text-white"></span>
                         </button>
 
-                        <div id="notif_dropdown" class="hidden fixed left-1/2 -translate-x-1/2 top-16 w-[min(22rem,calc(100vw-2rem))] sm:absolute sm:left-auto sm:translate-x-0 sm:top-auto sm:right-0 sm:mt-2 rounded-2xl border border-gray-800 bg-gray-900/95 shadow-2xl shadow-black/30 overflow-hidden" role="menu">
+                        <div id="notif_dropdown" class="hidden fixed left-1/2 -translate-x-1/2 top-20 w-[min(22rem,calc(100vw-2rem))] sm:absolute sm:left-auto sm:translate-x-0 sm:top-auto sm:right-0 sm:mt-2 rounded-2xl border border-gray-800 bg-gray-900/95 shadow-2xl shadow-black/30 overflow-hidden" role="menu">
                             <div class="px-4 py-3 border-b border-gray-800 flex items-center justify-between">
                                 <div class="text-sm font-semibold text-white">Notifications</div>
                                 <button type="button" id="notif_close" class="text-gray-300 hover:text-white transition-transform duration-200 ease-out hover:scale-110 active:scale-100">×</button>
@@ -133,7 +133,7 @@
                             <span class="hidden sm:inline text-sm text-gray-200 font-semibold">{{ user.username }}</span>
                         </button>
 
-                        <div id="user_menu" class="hidden fixed left-1/2 -translate-x-1/2 top-16 w-[min(18rem,calc(100vw-2rem))] sm:absolute sm:left-auto sm:translate-x-0 sm:top-auto sm:right-0 sm:mt-2 rounded-2xl border border-gray-800 bg-gray-900/95 shadow-2xl shadow-black/30 overflow-hidden" role="menu">
+                        <div id="user_menu" class="hidden fixed left-1/2 -translate-x-1/2 top-20 w-[min(18rem,calc(100vw-2rem))] sm:absolute sm:left-auto sm:translate-x-0 sm:top-auto sm:right-0 sm:mt-2 rounded-2xl border border-gray-800 bg-gray-900/95 shadow-2xl shadow-black/30 overflow-hidden" role="menu">
                             <a href="{% url 'profile' %}" class="block px-4 py-3 text-sm text-gray-200 hover:bg-gray-800/60 transition-all duration-200 ease-out hover:-translate-y-0.5 active:translate-y-0">
                                 View profile
                             </a>
@@ -207,6 +207,23 @@
         </div>
     </nav>
 
+    <div id="global-announcement-banner" class="vixo-global-banner w-full border-b border-red-500/40 bg-red-500/10 {% if not GLOBAL_ANNOUNCEMENT_MESSAGE %}hidden{% endif %}">
+        <div class="w-full max-w-7xl mx-auto px-4 sm:px-6 py-1.5">
+            <div class="vixo-marquee" aria-label="Global announcement">
+                <div class="vixo-marquee-track">
+                    <span class="font-extrabold text-red-200">Team Vixogram:</span>
+                    <span class="ml-2 text-red-100 global-announcement-msg">{{ GLOBAL_ANNOUNCEMENT_MESSAGE }}</span>
+                    <span class="mx-10 text-red-200/70">•</span>
+                    <span class="font-extrabold text-red-200">Team Vixogram:</span>
+                    <span class="ml-2 text-red-100 global-announcement-msg">{{ GLOBAL_ANNOUNCEMENT_MESSAGE }}</span>
+                    <span class="mx-10 text-red-200/70">•</span>
+                    <span class="font-extrabold text-red-200">Team Vixogram:</span>
+                    <span class="ml-2 text-red-100 global-announcement-msg">{{ GLOBAL_ANNOUNCEMENT_MESSAGE }}</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
     {% if messages %}
         <div id="toast-container" class="fixed top-16 right-3 sm:top-20 sm:right-6 z-50 w-[min(24rem,calc(100vw-3rem))] space-y-3 pointer-events-none">
             {% for message in messages %}
@@ -275,10 +292,10 @@
     </div>
     {% endwith %}
 
-    <div id="confirm-modal" class="fixed inset-0 z-50 hidden" aria-hidden="true">
-        <div class="absolute inset-0 bg-black/60"></div>
+    <div id="confirm-modal" class="fixed inset-0 z-50 hidden" aria-hidden="true" role="dialog" aria-modal="true">
+        <div id="confirm-backdrop" class="absolute inset-0 bg-black/60 opacity-0 transition duration-200 ease-out"></div>
         <div class="relative min-h-full flex items-center justify-center p-6">
-            <div class="w-full max-w-md rounded-2xl border border-gray-800 bg-gray-900/95 shadow-2xl">
+            <div id="confirm-panel" class="w-full max-w-md rounded-2xl border border-gray-800 bg-gray-900/95 shadow-2xl transform-gpu opacity-0 -translate-y-2 scale-95 transition duration-200 ease-out">
                 <div class="px-5 py-4 border-b border-gray-800">
                     <div id="confirm-title" class="text-sm font-semibold text-white">Confirm</div>
                 </div>
@@ -289,8 +306,37 @@
                     <button type="button" id="confirm-cancel" class="text-sm bg-gray-800 hover:bg-gray-700 text-white px-4 py-2 rounded-lg transition-colors">
                         Cancel
                     </button>
-                    <button type="button" id="confirm-ok" class="text-sm bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-lg transition-colors">
+                    <button type="button" id="confirm-ok" class="text-sm bg-violet-500 hover:bg-violet-600 text-white px-4 py-2 rounded-lg transition-colors">
                         Yes
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="prompt-modal" class="fixed inset-0 z-50 hidden" aria-hidden="true" role="dialog" aria-modal="true">
+        <div id="prompt-backdrop" class="absolute inset-0 bg-black/60 opacity-0 transition duration-200 ease-out"></div>
+        <div class="relative min-h-full flex items-center justify-center p-6">
+            <div id="prompt-panel" class="w-full max-w-md rounded-2xl border border-gray-800 bg-gray-900/95 shadow-2xl transform-gpu opacity-0 -translate-y-2 scale-95 transition duration-200 ease-out">
+                <div class="px-5 py-4 border-b border-gray-800">
+                    <div id="prompt-title" class="text-sm font-semibold text-white">Rename</div>
+                </div>
+                <div class="px-5 py-4 space-y-3">
+                    <div id="prompt-message" class="text-sm text-gray-300 hidden"></div>
+                    <input
+                        id="prompt-input"
+                        type="text"
+                        class="w-full rounded-xl border border-gray-800 bg-gray-950/40 px-4 py-2.5 text-sm text-gray-100 placeholder:text-gray-500 outline-none focus:ring-2 focus:ring-violet-500/50 focus:border-violet-500/60"
+                        placeholder="Enter name..."
+                        autocomplete="off"
+                    />
+                </div>
+                <div class="px-5 py-4 border-t border-gray-800 flex items-center justify-end gap-2">
+                    <button type="button" id="prompt-cancel" class="text-sm bg-gray-800 hover:bg-gray-700 text-white px-4 py-2 rounded-lg transition-colors">
+                        Cancel
+                    </button>
+                    <button type="button" id="prompt-ok" class="text-sm bg-violet-500 hover:bg-violet-600 text-white px-4 py-2 rounded-lg transition-colors">
+                        OK
                     </button>
                 </div>
             </div>

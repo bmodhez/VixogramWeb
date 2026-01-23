@@ -6,4 +6,5 @@ websocket_urlpatterns = [
     path("ws/online-status/", OnlineStatusConsumer.as_asgi()),
     path("ws/presence/<username>/", ProfilePresenceConsumer.as_asgi()),
     path("ws/notify/", NotificationsConsumer.as_asgi()),
+    path("ws/global-announcement/", GlobalAnnouncementConsumer.as_asgi()),
 ]

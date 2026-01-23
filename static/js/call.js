@@ -168,6 +168,8 @@
 
     // uid -> username (UI only)
     const participants = new Map();
+    // Represent self separately so we don't create a duplicate remote tile.
+    participants.set('me', 'You');
 
     // Remote video containers (uid -> { cardEl, playerEl, labelEl })
     const remoteCards = new Map();
@@ -613,7 +615,7 @@
             }
 
             // Warm participants list (UI only)
-            addParticipant(uid, 'You');
+            setParticipantsUi();
             for (const name of memberUsernames) {
                 if (name && name !== currentUsername) {
                     // don't add duplicates; these are just names

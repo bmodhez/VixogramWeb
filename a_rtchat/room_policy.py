@@ -27,9 +27,23 @@ def is_free_promotion_room(room) -> bool:
     return 'free promotion' in name
 
 
+def is_links_room(room) -> bool:
+    """Return True if this room is explicitly meant for sharing links.
+
+    Matches by substring to tolerate emoji/prefix variations.
+    """
+    name = _display_name(room).lower()
+    return 'links' in name
+
+
 def room_allows_links(room) -> bool:
     # Default policy: links only in private chats + Showcase + Free Promotion.
-    return bool(getattr(room, 'is_private', False)) or is_showcase_room(room) or is_free_promotion_room(room)
+    return (
+        bool(getattr(room, 'is_private', False))
+        or is_showcase_room(room)
+        or is_free_promotion_room(room)
+        or is_links_room(room)
+    )
 
 
 def room_allows_uploads(room) -> bool:

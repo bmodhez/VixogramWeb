@@ -350,6 +350,7 @@ TEMPLATES = [
                 'a_users.context_processors.notifications_badge',
                 'a_rtchat.context_processors.admin_reports_badge',
                 'a_rtchat.context_processors.mobile_ads_config',
+                'a_rtchat.context_processors.global_announcement',
             ],
         },
     },

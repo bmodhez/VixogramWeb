@@ -90,6 +90,251 @@
         // ignore
     }
 
+    function initRoomShareHint() {
+        const hint = document.getElementById('room_share_hint');
+        if (!hint) return;
+
+        hint.classList.remove('hidden');
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                try {
+                    hint.classList.remove('opacity-0', '-translate-y-2');
+                    hint.classList.add('opacity-100', 'translate-y-0');
+                } catch {
+                    // ignore
+                }
+            });
+        });
+
+        window.setTimeout(() => {
+            try {
+                hint.classList.add('opacity-0', '-translate-y-2');
+                hint.classList.remove('opacity-100', 'translate-y-0');
+            } catch {
+                // ignore
+            }
+            window.setTimeout(() => {
+                try { hint.remove(); } catch {}
+            }, 350);
+        }, 4000);
+    }
+
+    try {
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initRoomShareHint, { once: true });
+        } else {
+            initRoomShareHint();
+        }
+    } catch {
+        // ignore
+    }
+
+    // --- Private code room rename (admin/staff) ---
+    function __isSmallScreen() {
+        try { return !window.matchMedia('(min-width: 640px)').matches; } catch { return true; }
+    }
+
+    async function __renamePrivateRoomViaApi(url, group, nextName) {
+        function getCsrf() {
+            try { return (typeof getCookie === 'function' ? getCookie('csrftoken') : ''); } catch { return ''; }
+        }
+
+        const body = new URLSearchParams();
+        body.set('name', String(nextName || '').trim());
+
+        const resp = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+                'X-CSRFToken': getCsrf(),
+                'X-Requested-With': 'XMLHttpRequest',
+            },
+            body,
+            credentials: 'same-origin',
+        });
+
+        if (!resp.ok) return null;
+        const data = await resp.json().catch(() => null);
+        if (!data || !data.ok) return null;
+
+        const display = String(data.display || '').trim();
+        if (!display) return null;
+
+        // Update header title if this room is currently open.
+        if (group && String(chatroomName || '') === String(group)) {
+            const titleEl = document.getElementById('vixo_private_room_title');
+            if (titleEl) titleEl.textContent = display;
+        }
+
+        // Update sidebar label for this room (if present).
+        if (group) {
+            const sidebarLabel = document.querySelector(`[data-private-room-title-for=\"${CSS.escape(String(group))}\"]`);
+            if (sidebarLabel) sidebarLabel.textContent = display.slice(0, 30);
+        }
+
+        return display;
+    }
+
+    function initPrivateRoomRename() {
+        const btn = document.querySelector('[data-private-room-rename][data-private-room-rename-url]');
+        if (!btn) return;
+
+        btn.addEventListener('click', async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+
+            const url = btn.getAttribute('data-private-room-rename-url') || '';
+            const group = btn.getAttribute('data-private-room-group') || '';
+            if (!url) return;
+
+            const titleEl = document.getElementById('vixo_private_room_title');
+            const currentTitle = (titleEl && titleEl.textContent ? titleEl.textContent : '').trim();
+            const next = (typeof window.__vixoPrompt === 'function')
+                ? await window.__vixoPrompt({
+                    title: 'Rename room',
+                    message: 'Enter a new name (leave empty to clear).',
+                    defaultValue: currentTitle,
+                    placeholder: 'Private room name (optional)',
+                    okText: 'Rename',
+                    cancelText: 'Cancel',
+                })
+                : prompt('Rename room', currentTitle);
+            if (next === null) return;
+
+            const nextName = String(next || '').trim();
+            if (!nextName) {
+                if (!confirm('Clear room name and show code instead?')) return;
+            }
+
+            try {
+                const ok = await __renamePrivateRoomViaApi(url, group, nextName);
+                if (!ok && typeof __popup === 'function') __popup('Rename failed', 'Could not rename this room.');
+            } catch {
+                if (typeof __popup === 'function') __popup('Rename failed', 'Network error. Please try again.');
+            }
+        });
+    }
+
+    // Mobile-only: long-press on a private room in the sidebar to rename (admin/staff only).
+    function initPrivateRoomRenameLongPress() {
+        if (!__isSmallScreen()) return;
+
+        const items = Array.from(document.querySelectorAll('[data-private-room-item][data-private-room-rename-url][data-private-room-group]'));
+        if (!items.length) return;
+
+        items.forEach((el) => {
+            let timer = null;
+            let startX = 0;
+            let startY = 0;
+
+            function clear() {
+                if (timer) window.clearTimeout(timer);
+                timer = null;
+            }
+
+            function begin(clientX, clientY) {
+                clear();
+                startX = clientX;
+                startY = clientY;
+                timer = window.setTimeout(async () => {
+                    el.__vixoLongPressFired = true;
+
+                    const url = el.getAttribute('data-private-room-rename-url') || '';
+                    const group = el.getAttribute('data-private-room-group') || '';
+                    if (!url || !group) return;
+
+                    const label = el.querySelector(`[data-private-room-title-for=\"${CSS.escape(String(group))}\"]`) || el;
+                    const current = (label.textContent || '').trim();
+                    const next = (typeof window.__vixoPrompt === 'function')
+                        ? await window.__vixoPrompt({
+                            title: 'Rename room',
+                            message: 'Enter a new name (leave empty to clear).',
+                            defaultValue: current,
+                            placeholder: 'Private room name (optional)',
+                            okText: 'Rename',
+                            cancelText: 'Cancel',
+                        })
+                        : prompt('Rename room', current);
+                    if (next === null) return;
+
+                    const nextName = String(next || '').trim();
+                    if (!nextName) {
+                        if (!confirm('Clear room name and show code instead?')) return;
+                    }
+
+                    const ok = await __renamePrivateRoomViaApi(url, group, nextName);
+                    if (!ok && typeof __popup === 'function') __popup('Rename failed', 'Could not rename this room.');
+                }, 550);
+            }
+
+            el.addEventListener('pointerdown', (e) => {
+                if (!__isSmallScreen()) return;
+                if (e.pointerType === 'mouse') return;
+                begin(e.clientX || 0, e.clientY || 0);
+            });
+
+            el.addEventListener('pointermove', (e) => {
+                if (!timer) return;
+                const dx = Math.abs((e.clientX || 0) - startX);
+                const dy = Math.abs((e.clientY || 0) - startY);
+                if (dx > 12 || dy > 12) clear();
+            });
+
+            el.addEventListener('pointerup', clear);
+            el.addEventListener('pointercancel', clear);
+            el.addEventListener('pointerleave', clear);
+
+            el.addEventListener('click', (e) => {
+                if (el.__vixoLongPressFired) {
+                    el.__vixoLongPressFired = false;
+                    e.preventDefault();
+                    e.stopPropagation();
+                }
+            }, true);
+
+            el.addEventListener('contextmenu', (e) => {
+                if (!__isSmallScreen()) return;
+                e.preventDefault();
+            });
+        });
+    }
+
+    // Mobile-only: hide any tiny "SD" badge in the top bar (if some script injects it).
+    function initHideSdBadgeOnMobile() {
+        if (!__isSmallScreen()) return;
+        const topbar = document.getElementById('chat_topbar');
+        if (!topbar) return;
+        const nodes = Array.from(topbar.querySelectorAll('span, button, a, div'));
+        nodes.forEach((n) => {
+            const t = (n.textContent || '').trim();
+            if (t === 'SD') {
+                n.classList.add('hidden');
+            }
+        });
+    }
+
+    try {
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initPrivateRoomRename, { once: true });
+        } else {
+            initPrivateRoomRename();
+        }
+    } catch {
+        // ignore
+    }
+
+    try {
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initPrivateRoomRenameLongPress, { once: true });
+            document.addEventListener('DOMContentLoaded', initHideSdBadgeOnMobile, { once: true });
+        } else {
+            initPrivateRoomRenameLongPress();
+            initHideSdBadgeOnMobile();
+        }
+    } catch {
+        // ignore
+    }
+
     const chatroomName = String(cfg.chatroomName || '');
     const currentUserId = parseInt(cfg.currentUserId || 0, 10) || 0;
     const currentUsername = String(cfg.currentUsername || '');
@@ -1735,7 +1980,61 @@
     const __pendingByNonce = new Map();
     const __seenChatNonces = new Map();
     let __wsReconnectTimer = null;
+    let __wsHeartbeatTimer = null;
+    let __wsReconnectAttempt = 0;
     let __pollTimer = null;
+
+    const __WS_HEARTBEAT_MS = 25_000;
+    const __WS_RECONNECT_BASE_MS = 900;
+    const __WS_RECONNECT_FACTOR = 1.7;
+    const __WS_RECONNECT_MAX_MS = 30_000;
+
+    function __stopWsHeartbeat() {
+        try {
+            if (__wsHeartbeatTimer) clearInterval(__wsHeartbeatTimer);
+        } catch {
+            // ignore
+        }
+        __wsHeartbeatTimer = null;
+    }
+
+    function __startWsHeartbeat() {
+        __stopWsHeartbeat();
+        __wsHeartbeatTimer = setInterval(() => {
+            try {
+                if (!socket || socket.readyState !== WebSocket.OPEN) return;
+                socket.send(JSON.stringify({ type: 'ping' }));
+            } catch {
+                // ignore
+            }
+        }, __WS_HEARTBEAT_MS);
+    }
+
+    function __scheduleWsReconnect() {
+        if (__wsReconnectTimer) return;
+
+        const attempt = Math.min(30, Math.max(0, __wsReconnectAttempt || 0));
+        __wsReconnectAttempt = attempt + 1;
+
+        let delay = Math.min(
+            __WS_RECONNECT_MAX_MS,
+            Math.round(__WS_RECONNECT_BASE_MS * Math.pow(__WS_RECONNECT_FACTOR, attempt))
+        );
+
+        const jitter = 0.7 + Math.random() * 0.6;
+        delay = Math.round(delay * jitter);
+
+        try {
+            if (document.visibilityState === 'hidden') delay = Math.max(delay, 5000);
+        } catch {
+            // ignore
+        }
+
+        __wsReconnectTimer = setTimeout(() => {
+            __wsReconnectTimer = null;
+            connect();
+        }, delay);
+    }
 
     function __wsIsOpen() {
         try {
@@ -2085,6 +2384,7 @@
         socket.onopen = function () {
             wsConnected = true;
             stopPolling();
+            __wsReconnectAttempt = 0;
             if (__wsReconnectTimer) {
                 clearTimeout(__wsReconnectTimer);
                 __wsReconnectTimer = null;
@@ -2093,6 +2393,8 @@
             if (document.visibilityState === 'visible') sendReadAck(lastId);
             // On initial load/room switch, start at the latest message.
             forceScrollToBottomNow();
+
+            __startWsHeartbeat();
 
             // Ask server for active challenge state (private chats only; server will no-op otherwise).
             try {
@@ -2210,6 +2512,10 @@
                 return;
             }
 
+            if (payload.type === 'pong') {
+                return;
+            }
+
             if (payload.type === 'message_update' && payload.message_id && payload.html) {
                 const el = document.getElementById(`msg-${payload.message_id}`);
                 if (el) {
@@ -2279,14 +2585,9 @@
 
         socket.onclose = function () {
             wsConnected = false;
+            __stopWsHeartbeat();
             startPolling();
-            // Simple reconnect
-            if (!__wsReconnectTimer) {
-                __wsReconnectTimer = setTimeout(() => {
-                    __wsReconnectTimer = null;
-                    connect();
-                }, 1000);
-            }
+            __scheduleWsReconnect();
         };
 
         socket.onerror = function () {
@@ -2318,6 +2619,12 @@
         if (document.visibilityState !== 'visible') return;
         updateLastIdFromDom();
         if (isNearBottom()) sendReadAck(lastId);
+
+        try {
+            if (!__wsIsOpen()) __scheduleWsReconnect();
+        } catch {
+            // ignore
+        }
     });
 
     window.addEventListener('focus', () => {
@@ -3623,5 +3930,158 @@
         }
 
         sync(true);
+    })();
+
+    (function initCodeRoomWaitingList() {
+        const btn = document.getElementById('code_room_waiting_btn');
+        const panel = document.getElementById('code_room_waiting_panel');
+        const body = document.getElementById('code_room_waiting_body');
+        const closeBtn = document.getElementById('code_room_waiting_close');
+        const badge = document.getElementById('code_room_waiting_badge');
+        if (!btn || !panel || !body) return;
+
+        const listUrl = btn.getAttribute('data-waiting-list-url') || '';
+        const admitUrl = btn.getAttribute('data-waiting-admit-url') || '';
+
+        const getCsrf = () => {
+            try { return (typeof getCookie === 'function' ? getCookie('csrftoken') : ''); } catch { return ''; }
+        };
+
+        function setBadge(n) {
+            if (!badge) return;
+            const count = Math.max(0, parseInt(String(n ?? 0), 10) || 0);
+            if (count <= 0) {
+                badge.textContent = '0';
+                badge.style.display = 'none';
+                return;
+            }
+            badge.textContent = String(count);
+            badge.style.display = 'flex';
+        }
+
+        function renderEmpty(text) {
+            body.innerHTML = `<div class="text-xs text-gray-400 px-2 py-3">${__escapeHtml(text || 'No one is waiting.')}</div>`;
+        }
+
+        function renderList(items) {
+            if (!Array.isArray(items) || items.length === 0) {
+                renderEmpty('No one is waiting.');
+                return;
+            }
+
+            body.innerHTML = '';
+            for (const u of items) {
+                const row = document.createElement('div');
+                row.className = 'flex items-center gap-2 px-2 py-2 rounded-xl hover:bg-gray-800/40';
+
+                const avatar = document.createElement('div');
+                avatar.className = 'h-8 w-8 rounded-full bg-gray-800 overflow-hidden flex-none';
+                const av = String(u && u.avatar ? u.avatar : '').trim();
+                if (av) {
+                    avatar.innerHTML = `<img src="${__escapeHtml(av)}" alt="" class="h-full w-full object-cover" />`;
+                }
+
+                const meta = document.createElement('div');
+                meta.className = 'min-w-0 flex-1';
+                const display = String((u && u.display) || (u && u.username) || 'User');
+                const username = String((u && u.username) || '');
+                meta.innerHTML = `
+                    <div class="text-xs font-semibold text-gray-100 truncate">${__escapeHtml(display)}</div>
+                    <div class="text-[11px] text-gray-400 truncate">@${__escapeHtml(username)}</div>
+                `;
+
+                const admit = document.createElement('button');
+                admit.type = 'button';
+                admit.className = 'text-[11px] bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1.5 rounded-lg transition-colors flex-none';
+                admit.textContent = 'Admit';
+                admit.setAttribute('data-admit-user', String(u && u.id ? u.id : ''));
+
+                row.appendChild(avatar);
+                row.appendChild(meta);
+                row.appendChild(admit);
+                body.appendChild(row);
+            }
+        }
+
+        let refreshing = false;
+        async function refresh() {
+            if (!listUrl) return;
+            if (refreshing) return;
+            refreshing = true;
+            try {
+                body.innerHTML = '<div class="text-xs text-gray-400 px-2 py-3">Loading…</div>';
+                const r = await fetch(listUrl, { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+                const data = await r.json();
+                if (!data || !data.ok) {
+                    renderEmpty('Failed to load.');
+                    setBadge(0);
+                    return;
+                }
+                setBadge(data.count || 0);
+                renderList(data.pending || []);
+            } catch {
+                renderEmpty('Network issue.');
+            } finally {
+                refreshing = false;
+            }
+        }
+
+        function open() {
+            panel.classList.remove('hidden');
+            refresh();
+        }
+
+        function close() {
+            panel.classList.add('hidden');
+        }
+
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            if (panel.classList.contains('hidden')) open();
+            else close();
+        });
+
+        if (closeBtn) closeBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            close();
+        });
+
+        document.addEventListener('click', (e) => {
+            const t = e.target;
+            if (!t) return;
+            if (panel.classList.contains('hidden')) return;
+            if (panel.contains(t) || btn.contains(t)) return;
+            close();
+        }, true);
+
+        body.addEventListener('click', async (e) => {
+            const t = e.target && e.target.closest ? e.target.closest('[data-admit-user]') : null;
+            if (!t) return;
+            const userId = t.getAttribute('data-admit-user') || '';
+            if (!userId) return;
+            if (!admitUrl) return;
+
+            t.disabled = true;
+            try {
+                const r = await fetch(admitUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest',
+                        'X-CSRFToken': getCsrf(),
+                    },
+                    body: JSON.stringify({ user_id: parseInt(userId, 10) }),
+                });
+                const data = await r.json().catch(() => ({}));
+                if (!r.ok || !data || !data.ok) {
+                    // Keep UI simple; just refresh to reflect server state.
+                }
+            } catch {
+                // ignore
+            } finally {
+                t.disabled = false;
+                refresh();
+            }
+        }, true);
     })();
 })();

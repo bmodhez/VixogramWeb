@@ -16,6 +16,48 @@
       </div>
     </div>
 
+    <div class="mt-6 rounded-2xl border border-red-500/40 bg-red-500/10 p-4">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div class="text-sm font-semibold text-red-200">Global banner message</div>
+          <div class="mt-0.5 text-xs text-red-200/80">
+            This shows for everyone at the top of the site as a right-to-left scrolling message.
+          </div>
+        </div>
+        <div class="text-[11px] text-red-200/70">
+          Prefix will always be: <span class="font-semibold">Team Vixogram:</span>
+        </div>
+      </div>
+
+      <form method="post" action="{% url 'admin-global-banner' %}" class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
+        {% csrf_token %}
+        <input type="hidden" name="next" value="{{ request.get_full_path }}" />
+        <div>
+          <textarea
+            name="message"
+            rows="2"
+            maxlength="300"
+            placeholder="Type your global message…"
+            class="w-full bg-gray-900/40 border border-gray-700 text-gray-100 rounded-xl px-3 py-2 outline-none"
+          >{{ banner_message }}</textarea>
+          <label class="mt-2 inline-flex items-center gap-2 text-xs text-gray-200">
+            <input type="checkbox" name="is_active" value="1" class="accent-emerald-500" {% if banner_active %}checked{% endif %} />
+            Enable banner
+          </label>
+          {% if banner_active and banner_message %}
+            <div class="mt-2 text-xs text-gray-300">
+              Preview: <span class="font-semibold text-red-200">Team Vixogram:</span> {{ banner_message }}
+            </div>
+          {% endif %}
+        </div>
+        <div class="flex items-center gap-2">
+          <button type="submit" class="text-sm bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-xl transition-colors">
+            Update global banner
+          </button>
+        </div>
+      </form>
+    </div>
+
     <div class="mt-6 flex flex-wrap gap-2">
       <a href="{% url 'admin-support-enquiries' %}" class="text-xs px-3 py-2 rounded-lg border border-gray-800 {% if not status %}bg-emerald-500 text-white{% else %}bg-gray-900/40 text-gray-200 hover:bg-gray-800/60{% endif %}">All</a>
       <a href="{% url 'admin-support-enquiries' %}?status=open" class="text-xs px-3 py-2 rounded-lg border border-gray-800 {% if status == 'open' %}bg-amber-500 text-white{% else %}bg-gray-900/40 text-gray-200 hover:bg-gray-800/60{% endif %}">Open{% if open_count is not None %} ({{ open_count }}){% endif %}</a>

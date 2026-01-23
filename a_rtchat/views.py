@@ -141,6 +141,13 @@ CHAT_UPLOAD_LIMIT_PER_ROOM = getattr(settings, 'CHAT_UPLOAD_LIMIT_PER_ROOM', 15)
 CHAT_UPLOAD_MAX_BYTES = getattr(settings, 'CHAT_UPLOAD_MAX_BYTES', 10 * 1024 * 1024)
 CHAT_REACTION_EMOJIS = getattr(settings, 'CHAT_REACTION_EMOJIS', ['👍', '❤️', '😂', '😮', '😢', '🙏'])
 PRIVATE_ROOM_MEMBER_LIMIT = int(getattr(settings, 'PRIVATE_ROOM_MEMBER_LIMIT', 10))
+CODE_ROOM_WAITING_ACTIVE_SECONDS = int(getattr(settings, 'CODE_ROOM_WAITING_ACTIVE_SECONDS', 10))
+
+
+def _code_room_waiting_cutoff():
+    # Requests are considered "active" only while the waiting page is still polling.
+    # This makes a requester disappear from the admin list shortly after they leave/back.
+    return timezone.now() - timedelta(seconds=max(5, CODE_ROOM_WAITING_ACTIVE_SECONDS))
 
 
 def _uploads_used_today(chat_group, user) -> int:
@@ -373,6 +380,25 @@ def chat_view(request, chatroom_name='public-chat'):
             messages.error(request, 'You are blocked from private chats.')
             return redirect('chatroom', 'public-chat')
         if request.user not in chat_group.members.all():
+            # Private code rooms: allow a waiting state for users who joined via code
+            # but haven't been admitted by the room admin yet.
+            if getattr(chat_group, 'is_code_room', False):
+                pending = CodeRoomJoinRequest.objects.filter(
+                    room=chat_group,
+                    user=request.user,
+                    admitted_at__isnull=True,
+                ).exists()
+                if pending:
+                    return render(
+                        request,
+                        'a_rtchat/code_room_waiting.html',
+                        {
+                            'chat_group': chat_group,
+                            'chatroom_name': chatroom_name,
+                            'status_url': reverse('code-room-waiting-status', args=[chatroom_name]),
+                            'redirect_url': reverse('chatroom', args=[chatroom_name]),
+                        },
+                    )
             raise Http404()
         for member in chat_group.members.all():
             if member != request.user:
@@ -1424,6 +1450,22 @@ def chat_view(request, chatroom_name='public-chat'):
         'reaction_emojis': CHAT_REACTION_EMOJIS,
     }
 
+    # Waiting list count for admin/staff (code rooms only)
+    try:
+        if getattr(chat_group, 'is_private', False) and getattr(chat_group, 'is_code_room', False) and (
+            request.user == getattr(chat_group, 'admin', None) or request.user.is_staff
+        ):
+            cutoff = _code_room_waiting_cutoff()
+            context['code_room_waiting_count'] = CodeRoomJoinRequest.objects.filter(
+                room=chat_group,
+                admitted_at__isnull=True,
+                last_seen_at__gte=cutoff,
+            ).count()
+        else:
+            context['code_room_waiting_count'] = 0
+    except Exception:
+        context['code_room_waiting_count'] = 0
+
     # Dynamic badges under username (computed per author in the loaded message set)
     try:
         attach_auto_badges(chat_messages, chat_group)
@@ -1700,9 +1742,180 @@ def join_private_room_by_code(request):
             messages.error(request, 'User limit reached')
             return redirect('home')
 
-        locked_room.members.add(request.user)
+        # Place user into waiting list until admitted by admin/staff.
+        CodeRoomJoinRequest.objects.update_or_create(
+            room=locked_room,
+            user=request.user,
+            defaults={
+                'admitted_at': None,
+                'admitted_by': None,
+                'last_seen_at': timezone.now(),
+            },
+        )
 
     return redirect('chatroom', room.group_name)
+
+
+@login_required
+def code_room_waiting_list(request, chatroom_name):
+    chat_group = get_object_or_404(ChatGroup, group_name=chatroom_name)
+
+    if not getattr(chat_group, 'is_private', False) or not getattr(chat_group, 'is_code_room', False):
+        raise Http404()
+
+    if request.user != chat_group.admin and not request.user.is_staff:
+        raise Http404()
+
+    cutoff = _code_room_waiting_cutoff()
+    qs = (
+        CodeRoomJoinRequest.objects.filter(room=chat_group, admitted_at__isnull=True, last_seen_at__gte=cutoff)
+        .select_related('user')
+        .order_by('created_at')
+    )
+
+    pending = []
+    for jr in qs:
+        u = jr.user
+        try:
+            profile = getattr(u, 'profile', None)
+        except Exception:
+            profile = None
+        try:
+            display = (getattr(profile, 'name', None) or u.username)
+        except Exception:
+            display = u.username
+        try:
+            avatar = getattr(profile, 'avatar', '') if profile else ''
+        except Exception:
+            avatar = ''
+
+        pending.append({
+            'id': u.id,
+            'username': u.username,
+            'display': display,
+            'avatar': avatar,
+        })
+
+    return JsonResponse({'ok': True, 'count': len(pending), 'pending': pending})
+
+
+@login_required
+def code_room_waiting_admit(request, chatroom_name):
+    chat_group = get_object_or_404(ChatGroup, group_name=chatroom_name)
+
+    if request.method != 'POST':
+        raise Http404()
+
+    if not getattr(chat_group, 'is_private', False) or not getattr(chat_group, 'is_code_room', False):
+        raise Http404()
+
+    if request.user != chat_group.admin and not request.user.is_staff:
+        raise Http404()
+
+    try:
+        payload = json.loads(request.body.decode('utf-8') or '{}')
+    except Exception:
+        payload = {}
+
+    user_id = payload.get('user_id') or request.POST.get('user_id')
+    try:
+        user_id = int(user_id)
+    except Exception:
+        return JsonResponse({'ok': False, 'error': 'invalid_user'}, status=400)
+
+    with transaction.atomic():
+        locked_room = ChatGroup.objects.select_for_update().filter(pk=chat_group.pk).first()
+        if not locked_room:
+            raise Http404()
+
+        jr = CodeRoomJoinRequest.objects.select_for_update().filter(room=locked_room, user_id=user_id).first()
+        if not jr or not jr.is_pending:
+            return JsonResponse({'ok': False, 'error': 'not_pending'}, status=404)
+
+        if locked_room.members.filter(pk=user_id).exists():
+            jr.mark_admitted(by_user=request.user)
+            return JsonResponse({'ok': True, 'already_member': True})
+
+        if locked_room.members.count() >= PRIVATE_ROOM_MEMBER_LIMIT:
+            return JsonResponse({'ok': False, 'error': 'member_limit'}, status=400)
+
+        locked_room.members.add(user_id)
+        jr.mark_admitted(by_user=request.user)
+
+    return JsonResponse({'ok': True})
+
+
+@login_required
+def code_room_waiting_status(request, chatroom_name):
+    chat_group = get_object_or_404(ChatGroup, group_name=chatroom_name)
+
+    if not getattr(chat_group, 'is_private', False) or not getattr(chat_group, 'is_code_room', False):
+        raise Http404()
+
+    if chat_group.members.filter(pk=request.user.pk).exists():
+        return JsonResponse({'ok': True, 'status': 'admitted', 'redirect': reverse('chatroom', args=[chatroom_name])})
+
+    pending_qs = CodeRoomJoinRequest.objects.filter(
+        room=chat_group,
+        user=request.user,
+        admitted_at__isnull=True,
+    )
+    pending = pending_qs.exists()
+
+    if pending:
+        # Mark presence so admins only see active requesters.
+        try:
+            pending_qs.update(last_seen_at=timezone.now())
+        except Exception:
+            pass
+        return JsonResponse({'ok': True, 'status': 'pending'})
+
+    return JsonResponse({'ok': True, 'status': 'not_found'})
+
+
+@login_required
+def private_room_rename(request, chatroom_name):
+    """Rename a private *code room* (not 1:1 DMs).
+
+    Only the room admin or staff can rename. Accepts either form-encoded POST
+    (`name`) or JSON body (`{"name": "..."}`). Returns JSON.
+    """
+    chat_group = get_object_or_404(ChatGroup, group_name=chatroom_name)
+
+    if request.method != 'POST':
+        raise Http404()
+
+    if not getattr(chat_group, 'is_private', False) or not getattr(chat_group, 'is_code_room', False):
+        raise Http404()
+
+    if request.user != chat_group.admin and not request.user.is_staff:
+        raise Http404()
+
+    if request.user not in chat_group.members.all() and not request.user.is_staff:
+        raise Http404()
+
+    name = (request.POST.get('name') or '').strip()
+    if not name:
+        try:
+            payload = json.loads(request.body.decode('utf-8') or '{}')
+            name = (payload.get('name') or '').strip()
+        except Exception:
+            name = ''
+
+    # Normalize + enforce max length.
+    name = (name or '').strip()
+    if len(name) > 128:
+        name = name[:128]
+
+    chat_group.code_room_name = name or None
+    chat_group.save(update_fields=['code_room_name'])
+
+    return JsonResponse({
+        'ok': True,
+        'group': chat_group.group_name,
+        'name': chat_group.code_room_name or '',
+        'display': chat_group.code_room_name or chat_group.room_code or chat_group.group_name,
+    })
 
 @login_required
 def get_or_create_chatroom(request, username):
@@ -2340,11 +2553,25 @@ def admin_support_enquiries_view(request):
     open_count = SupportEnquiry.objects.filter(status=SupportEnquiry.STATUS_OPEN).count()
     resolved_count = SupportEnquiry.objects.filter(status=SupportEnquiry.STATUS_RESOLVED).count()
 
+    banner_message = ''
+    banner_active = False
+    try:
+        from a_rtchat.models import GlobalAnnouncement
+
+        ann = GlobalAnnouncement.objects.filter(pk=1).first()
+        if ann is not None:
+            banner_message = (ann.message or '').strip()
+            banner_active = bool(ann.is_active and banner_message)
+    except Exception:
+        pass
+
     return render(request, 'a_rtchat/admin_support_enquiries.html', {
         'enquiries': enquiries,
         'status': status,
         'open_count': int(open_count or 0),
         'resolved_count': int(resolved_count or 0),
+        'banner_message': banner_message,
+        'banner_active': banner_active,
     })
 
 
@@ -2410,11 +2637,8 @@ def admin_support_enquiry_reply_view(request, enquiry_id: int):
     except Exception:
         pass
 
-    # Realtime toast/badge via per-user notify WS
+    # Realtime: notify the user (all open tabs) via notify websocket.
     try:
-        from asgiref.sync import async_to_sync
-        from channels.layers import get_channel_layer
-
         channel_layer = get_channel_layer()
         async_to_sync(channel_layer.group_send)(
             f"notify_user_{enquiry.user_id}",
@@ -2431,6 +2655,81 @@ def admin_support_enquiry_reply_view(request, enquiry_id: int):
     status = (request.POST.get('next_status') or '').strip().lower()
     if status in {SupportEnquiry.STATUS_OPEN, SupportEnquiry.STATUS_RESOLVED}:
         return redirect(f"{reverse('admin-support-enquiries')}?status={status}")
+    return redirect('admin-support-enquiries')
+
+
+@login_required
+def admin_global_announcement_update_view(request):
+    if request.method != 'POST':
+        raise Http404()
+    if not request.user.is_staff:
+        raise Http404()
+
+    raw_message = (request.POST.get('message') or '').strip()
+    # If admin pastes the prefix, avoid duplicating it in UI.
+    lowered = raw_message.lower()
+    for prefix in ('team vixogram:', 'team vixogram -', 'team vixogram'):
+        if lowered.startswith(prefix):
+            raw_message = raw_message[len(prefix):].lstrip(' :-')
+            break
+
+    is_active = bool(request.POST.get('is_active'))
+    if not raw_message:
+        is_active = False
+
+    try:
+        from a_rtchat.models import GlobalAnnouncement
+
+        channel_layer = None
+        try:
+            from channels.layers import get_channel_layer
+            channel_layer = get_channel_layer()
+        except Exception:
+            channel_layer = None
+
+        ann, _ = GlobalAnnouncement.objects.get_or_create(pk=1)
+        ann.message = raw_message
+        ann.is_active = bool(is_active)
+        ann.updated_by = request.user
+        ann.save(update_fields=['message', 'is_active', 'updated_by', 'updated_at'])
+
+        # Realtime: broadcast to all connected clients.
+        try:
+            if channel_layer is not None:
+                async_to_sync(channel_layer.group_send)(
+                    'global_announcement',
+                    {
+                        'type': 'global_announcement_handler',
+                        'active': bool(ann.is_active),
+                        'message': (ann.message or '').strip(),
+                    },
+                )
+        except Exception:
+            pass
+
+        if ann.is_active:
+            messages.success(request, 'Global banner enabled')
+        else:
+            messages.success(request, 'Global banner disabled')
+    except Exception:
+        messages.error(request, 'Could not update global banner')
+
+    next_url = (request.POST.get('next') or '').strip()
+    if next_url and url_has_allowed_host_and_scheme(
+        url=next_url,
+        allowed_hosts={request.get_host()},
+        require_https=request.is_secure(),
+    ):
+        return redirect(next_url)
+
+    referer = (request.META.get('HTTP_REFERER') or '').strip()
+    if referer and url_has_allowed_host_and_scheme(
+        url=referer,
+        allowed_hosts={request.get_host()},
+        require_https=request.is_secure(),
+    ):
+        return redirect(referer)
+
     return redirect('admin-support-enquiries')
 
 

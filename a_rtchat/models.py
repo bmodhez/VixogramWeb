@@ -1,5 +1,6 @@
 from django.db import models
 from django.contrib.auth.models import User
+from django.utils import timezone
 import shortuuid
 from PIL import Image
 import os
@@ -40,6 +41,68 @@ class ChatGroup(models.Model):
                     self.room_code = candidate
                     break
         super().save(*args, **kwargs)
+
+
+class CodeRoomJoinRequest(models.Model):
+    """Pending join requests for private code rooms.
+
+    Users who join via room code are placed here until the room admin (or staff)
+    admits them, at which point they are added to ChatGroup.members.
+    """
+
+    room = models.ForeignKey(ChatGroup, related_name='code_room_join_requests', on_delete=models.CASCADE)
+    user = models.ForeignKey(User, related_name='code_room_join_requests', on_delete=models.CASCADE)
+    created_at = models.DateTimeField(auto_now_add=True)
+    # Updated by the waiting page poll to indicate the requester is still present.
+    last_seen_at = models.DateTimeField(default=timezone.now, db_index=True)
+    admitted_at = models.DateTimeField(null=True, blank=True)
+    admitted_by = models.ForeignKey(
+        User,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='admitted_code_room_join_requests',
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['room', 'user'], name='uniq_code_room_join_request_room_user'),
+        ]
+        indexes = [
+            models.Index(fields=['room', 'admitted_at', '-created_at'], name='crjr_room_status_created_idx'),
+            models.Index(fields=['room', 'admitted_at', '-last_seen_at'], name='crjr_room_status_seen_idx'),
+        ]
+
+    @property
+    def is_pending(self):
+        return self.admitted_at is None
+
+    def mark_admitted(self, by_user=None):
+        self.admitted_at = timezone.now()
+        self.admitted_by = by_user
+        self.save(update_fields=['admitted_at', 'admitted_by'])
+
+
+class GlobalAnnouncement(models.Model):
+    """A single global banner message shown site-wide (set by staff)."""
+
+    message = models.CharField(max_length=300, blank=True, default='')
+    is_active = models.BooleanField(default=False)
+    updated_by = models.ForeignKey(
+        User,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='updated_global_announcements',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        label = (self.message or '').strip()
+        if not label:
+            label = '(empty)'
+        return f"GlobalAnnouncement({label[:40]})"
 
 
 class PrivateChatGroup(ChatGroup):

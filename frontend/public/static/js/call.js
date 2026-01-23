@@ -563,7 +563,7 @@
             }
 
             // Warm participants list (UI only)
-            addParticipant(uid, 'You');
+            setParticipantsUi();
             for (const name of memberUsernames) {
                 if (name && name !== currentUsername) {
                     // don't add duplicates; these are just names

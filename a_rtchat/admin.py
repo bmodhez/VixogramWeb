@@ -1,4 +1,5 @@
 from django.contrib import admin
+from django.contrib.admin.views.main import ChangeList
 
 from .models import ChatGroup, GroupMessage, PrivateChatGroup, ModerationEvent
 
@@ -23,9 +24,34 @@ class PrivateChatGroupAdmin(admin.ModelAdmin):
 
 @admin.register(GroupMessage)
 class GroupMessageAdmin(admin.ModelAdmin):
-	list_display = ('id', 'group', 'author', 'created', 'body', 'file_caption', 'file')
+	list_display = ('sr_no', 'id', 'group', 'author', 'created', 'body', 'file_caption', 'file')
 	list_filter = ('created',)
 	search_fields = ('body', 'author__username', 'group__group_name', 'group__room_code')
+
+	class VixoChangeList(ChangeList):
+		def get_results(self, request):
+			super().get_results(request)
+			try:
+				start = int(getattr(self, 'page_num', 0) or 0) * int(getattr(self, 'list_per_page', 0) or 0)
+			except Exception:
+				start = 0
+			for i, obj in enumerate(self.result_list, start=start + 1):
+				try:
+					obj._vixo_sr_no = i
+				except Exception:
+					pass
+
+	def get_changelist(self, request, **kwargs):
+		return self.VixoChangeList
+
+	@admin.display(description='No.')
+	def sr_no(self, obj):
+		value = getattr(obj, '_vixo_sr_no', None)
+		try:
+			n = int(value)
+		except Exception:
+			n = None
+		return f'{n:02d}' if n else ''
 
 
 @admin.register(ModerationEvent)

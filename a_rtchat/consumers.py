@@ -54,6 +54,78 @@ from .mentions import extract_mention_usernames, resolve_mentioned_users
 from .auto_badges import attach_auto_badges
 
 
+class GlobalAnnouncementConsumer(WebsocketConsumer):
+    """Site-wide global announcement banner updates (real-time).
+
+    Any connected client joins a single channel-layer group and receives
+    JSON payloads whenever staff updates the banner.
+    """
+
+    group_name = 'global_announcement'
+
+    def _current_state(self):
+        try:
+            ann = GlobalAnnouncement.objects.filter(pk=1).first()
+            if not ann:
+                return {'active': False, 'message': ''}
+            msg = (ann.message or '').strip()
+            active = bool(ann.is_active and msg)
+            return {'active': active, 'message': msg if active else ''}
+        except Exception:
+            return {'active': False, 'message': ''}
+
+    def connect(self):
+        try:
+            self.accept()
+        except Exception:
+            return
+
+        try:
+            async_to_sync(self.channel_layer.group_add)(self.group_name, self.channel_name)
+        except Exception:
+            pass
+
+        try:
+            payload = {'type': 'global_announcement', **self._current_state()}
+            self.send(text_data=json.dumps(payload))
+        except Exception:
+            return
+
+    def disconnect(self, close_code):
+        try:
+            async_to_sync(self.channel_layer.group_discard)(self.group_name, self.channel_name)
+        except Exception:
+            return
+
+    def receive(self, text_data=None, bytes_data=None):
+        # Allow clients to send keepalive frames (some proxies drop idle sockets).
+        if not text_data:
+            return
+        try:
+            payload = json.loads(text_data)
+        except Exception:
+            return
+        event_type = (payload.get('type') or '').strip().lower()
+        if event_type in {'ping', 'heartbeat'}:
+            try:
+                self.send(text_data=json.dumps({'type': 'pong'}))
+            except Exception:
+                pass
+            return
+
+    def global_announcement_handler(self, event):
+        try:
+            msg = (event.get('message') or '').strip()
+            active = bool(event.get('active') and msg)
+            self.send(text_data=json.dumps({
+                'type': 'global_announcement',
+                'active': active,
+                'message': msg if active else '',
+            }))
+        except Exception:
+            return
+
+
 def _celery_broker_configured() -> bool:
     try:
         env_broker = (os.environ.get('CELERY_BROKER_URL') or '').strip()
@@ -426,7 +498,7 @@ class ChatroomConsumer(WebsocketConsumer):
         event_type = (text_data_json.get('type') or '').strip().lower()
 
         # Client heartbeat (keeps online presence accurate).
-        if event_type == 'ping':
+        if event_type in {'ping', 'heartbeat'}:
             # Also used to expire challenges on server time, even if nobody is sending messages.
             try:
                 if getattr(self.chatroom, 'is_private', False):
@@ -437,6 +509,12 @@ class ChatroomConsumer(WebsocketConsumer):
                         except Exception:
                             pass
                         self._broadcast_challenge_end_once(active, title='Challenge ended')
+            except Exception:
+                pass
+
+            # Best-effort pong so clients can confirm liveness.
+            try:
+                self.send(text_data=json.dumps({'type': 'pong'}))
             except Exception:
                 pass
             return
@@ -1334,6 +1412,21 @@ class OnlineStatusConsumer(WebsocketConsumer):
         
         self.accept()
         self.online_status()
+
+    def receive(self, text_data=None, bytes_data=None):
+        if not text_data:
+            return
+        try:
+            payload = json.loads(text_data)
+        except Exception:
+            return
+        event_type = (payload.get('type') or '').strip().lower()
+        if event_type in {'ping', 'heartbeat'}:
+            try:
+                self.send(text_data=json.dumps({'type': 'pong'}))
+            except Exception:
+                pass
+            return
         
         
     def disconnect(self, close_code):
@@ -1413,6 +1506,21 @@ class NotificationsConsumer(WebsocketConsumer):
             )
         except Exception:
             pass
+
+    def receive(self, text_data=None, bytes_data=None):
+        if not text_data:
+            return
+        try:
+            payload = json.loads(text_data)
+        except Exception:
+            return
+        event_type = (payload.get('type') or '').strip().lower()
+        if event_type in {'ping', 'heartbeat'}:
+            try:
+                self.send(text_data=json.dumps({'type': 'pong'}))
+            except Exception:
+                pass
+            return
 
     def call_invite_notify_handler(self, event):
         # DND: user should not receive call invites.

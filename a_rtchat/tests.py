@@ -2,8 +2,10 @@ from django.contrib.auth.models import User
 from django.test import TestCase
 from django.urls import reverse
 from django.contrib.messages import get_messages
+from django.utils import timezone
+from datetime import timedelta
 
-from .models import ChatGroup
+from .models import ChatGroup, CodeRoomJoinRequest
 
 
 class AdminToggleUserBlockTests(TestCase):
@@ -50,3 +52,130 @@ class PrivateRoomMemberLimitTests(TestCase):
 		self.assertIn('User limit reached', msgs)
 		room.refresh_from_db()
 		self.assertEqual(room.members.count(), 10)
+
+
+class PrivateRoomRenameTests(TestCase):
+	def test_admin_can_rename_private_code_room(self):
+		owner = User.objects.create_user(username='owner2', password='pass12345')
+		room = ChatGroup.objects.create(is_private=True, is_code_room=True, admin=owner)
+		room.members.add(owner)
+
+		self.client.force_login(owner)
+		url = reverse('private-room-rename', kwargs={'chatroom_name': room.group_name})
+		resp = self.client.post(url, data={'name': 'My Room'})
+		self.assertEqual(resp.status_code, 200)
+		data = resp.json()
+		self.assertTrue(data.get('ok'))
+
+		room.refresh_from_db()
+		self.assertEqual(room.code_room_name, 'My Room')
+
+	def test_non_admin_cannot_rename(self):
+		owner = User.objects.create_user(username='owner3', password='pass12345')
+		other = User.objects.create_user(username='other3', password='pass12345')
+		room = ChatGroup.objects.create(is_private=True, is_code_room=True, admin=owner)
+		room.members.add(owner, other)
+
+		self.client.force_login(other)
+		url = reverse('private-room-rename', kwargs={'chatroom_name': room.group_name})
+		resp = self.client.post(url, data={'name': 'Hacked'})
+		self.assertEqual(resp.status_code, 404)
+
+		room.refresh_from_db()
+		self.assertNotEqual(room.code_room_name, 'Hacked')
+
+	def test_admin_can_clear_name(self):
+		owner = User.objects.create_user(username='owner4', password='pass12345')
+		room = ChatGroup.objects.create(is_private=True, is_code_room=True, admin=owner, code_room_name='X')
+		room.members.add(owner)
+
+		self.client.force_login(owner)
+		url = reverse('private-room-rename', kwargs={'chatroom_name': room.group_name})
+		resp = self.client.post(url, data={'name': ''})
+		self.assertEqual(resp.status_code, 200)
+
+		room.refresh_from_db()
+		self.assertIsNone(room.code_room_name)
+
+
+class CodeRoomWaitingListTests(TestCase):
+	def test_join_by_code_creates_waiting_request_not_member(self):
+		owner = User.objects.create_user(username='owner_wait', password='pass12345')
+		room = ChatGroup.objects.create(is_private=True, is_code_room=True, admin=owner)
+		room.members.add(owner)
+
+		joiner = User.objects.create_user(username='joiner_wait', password='pass12345')
+		self.client.force_login(joiner)
+		url = reverse('private-room-join')
+		resp = self.client.post(url, data={'code': room.room_code})
+		self.assertEqual(resp.status_code, 302)
+
+		room.refresh_from_db()
+		self.assertFalse(room.members.filter(pk=joiner.pk).exists())
+		self.assertTrue(CodeRoomJoinRequest.objects.filter(room=room, user=joiner, admitted_at__isnull=True).exists())
+
+		# Visiting the room shows waiting page (not 404)
+		resp2 = self.client.get(reverse('chatroom', kwargs={'chatroom_name': room.group_name}))
+		self.assertEqual(resp2.status_code, 200)
+
+	def test_admin_can_list_and_admit_waiting_user(self):
+		owner = User.objects.create_user(username='owner_admit', password='pass12345')
+		room = ChatGroup.objects.create(is_private=True, is_code_room=True, admin=owner)
+		room.members.add(owner)
+
+		joiner = User.objects.create_user(username='joiner_admit', password='pass12345')
+		CodeRoomJoinRequest.objects.create(room=room, user=joiner)
+
+		self.client.force_login(owner)
+		list_url = reverse('code-room-waiting-list', args=[room.group_name])
+		list_resp = self.client.get(list_url)
+		self.assertEqual(list_resp.status_code, 200)
+		data = list_resp.json()
+		self.assertTrue(data.get('ok'))
+		self.assertEqual(data.get('count'), 1)
+
+		admit_url = reverse('code-room-waiting-admit', args=[room.group_name])
+		admit_resp = self.client.post(admit_url, data={'user_id': joiner.id})
+		self.assertEqual(admit_resp.status_code, 200)
+		self.assertTrue(admit_resp.json().get('ok'))
+
+		room.refresh_from_db()
+		self.assertTrue(room.members.filter(pk=joiner.pk).exists())
+		jr = CodeRoomJoinRequest.objects.get(room=room, user=joiner)
+		self.assertIsNotNone(jr.admitted_at)
+
+	def test_waiting_list_only_shows_active_requesters(self):
+		owner = User.objects.create_user(username='owner_active', password='pass12345')
+		room = ChatGroup.objects.create(is_private=True, is_code_room=True, admin=owner)
+		room.members.add(owner)
+
+		joiner = User.objects.create_user(username='joiner_inactive', password='pass12345')
+		jr = CodeRoomJoinRequest.objects.create(room=room, user=joiner)
+		CodeRoomJoinRequest.objects.filter(pk=jr.pk).update(last_seen_at=timezone.now() - timedelta(minutes=5))
+
+		self.client.force_login(owner)
+		list_url = reverse('code-room-waiting-list', args=[room.group_name])
+		resp = self.client.get(list_url)
+		self.assertEqual(resp.status_code, 200)
+		data = resp.json()
+		self.assertTrue(data.get('ok'))
+		self.assertEqual(data.get('count'), 0)
+
+	def test_waiting_status_updates_last_seen_at(self):
+		owner = User.objects.create_user(username='owner_seen', password='pass12345')
+		room = ChatGroup.objects.create(is_private=True, is_code_room=True, admin=owner)
+		room.members.add(owner)
+
+		joiner = User.objects.create_user(username='joiner_seen', password='pass12345')
+		jr = CodeRoomJoinRequest.objects.create(room=room, user=joiner)
+		past = timezone.now() - timedelta(minutes=2)
+		CodeRoomJoinRequest.objects.filter(pk=jr.pk).update(last_seen_at=past)
+
+		self.client.force_login(joiner)
+		status_url = reverse('code-room-waiting-status', args=[room.group_name])
+		resp = self.client.get(status_url)
+		self.assertEqual(resp.status_code, 200)
+		self.assertEqual(resp.json().get('status'), 'pending')
+
+		jr.refresh_from_db()
+		self.assertGreater(jr.last_seen_at, past)

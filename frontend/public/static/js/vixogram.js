@@ -133,6 +133,109 @@
   // Expose for other scripts.
   window.getCookie = window.getCookie || getCookie;
 
+  // --- Small animation helpers (used by dropdowns & modals) ---
+  const __vixoNextFrame = (cb) => {
+    try {
+      window.requestAnimationFrame(() => window.requestAnimationFrame(cb));
+    } catch {
+      try { cb(); } catch {}
+    }
+  };
+
+  function __vixoAnimateDropdownOpen(panel, { withTransform = true } = {}) {
+    if (!panel) return;
+    try {
+      if (panel.dataset) delete panel.dataset.vixoCloseToken;
+    } catch {}
+
+    panel.classList.remove('hidden');
+    panel.classList.add('transition', 'duration-200', 'ease-out');
+    panel.classList.add('opacity-0', 'pointer-events-none');
+    panel.classList.remove('opacity-100');
+
+    if (withTransform) {
+      panel.classList.add('transform');
+      panel.classList.add('-translate-y-2', 'scale-95');
+      panel.classList.remove('translate-y-0', 'scale-100');
+    }
+
+    __vixoNextFrame(() => {
+      panel.classList.remove('opacity-0', 'pointer-events-none');
+      panel.classList.add('opacity-100');
+      if (withTransform) {
+        panel.classList.remove('-translate-y-2', 'scale-95');
+        panel.classList.add('translate-y-0', 'scale-100');
+      }
+    });
+  }
+
+  function __vixoAnimateDropdownClose(panel, { withTransform = true } = {}) {
+    if (!panel) return;
+
+    panel.classList.add('transition', 'duration-150', 'ease-in');
+    panel.classList.add('opacity-0', 'pointer-events-none');
+    panel.classList.remove('opacity-100');
+
+    if (withTransform) {
+      panel.classList.remove('translate-y-0', 'scale-100');
+      panel.classList.add('-translate-y-2', 'scale-95');
+    }
+
+    const closeToken = String(Date.now());
+    try {
+      if (panel.dataset) panel.dataset.vixoCloseToken = closeToken;
+    } catch {}
+
+    window.setTimeout(() => {
+      try {
+        if (panel.dataset && panel.dataset.vixoCloseToken !== closeToken) return;
+      } catch {}
+      panel.classList.add('hidden');
+    }, 170);
+  }
+
+  function __vixoModalOpen(modal, backdrop, panel) {
+    if (!modal) return;
+    try {
+      modal.classList.remove('hidden');
+      modal.setAttribute('aria-hidden', 'false');
+    } catch {}
+
+    try {
+      if (backdrop) {
+        backdrop.classList.remove('opacity-0');
+        backdrop.classList.add('opacity-100');
+      }
+      if (panel) {
+        panel.classList.remove('opacity-0', '-translate-y-2', 'scale-95');
+        panel.classList.add('opacity-100', 'translate-y-0', 'scale-100');
+      }
+    } catch {}
+  }
+
+  function __vixoModalClose(modal, backdrop, panel, afterClose) {
+    if (!modal) return;
+    try {
+      modal.setAttribute('aria-hidden', 'true');
+    } catch {}
+
+    try {
+      if (backdrop) {
+        backdrop.classList.add('opacity-0');
+        backdrop.classList.remove('opacity-100');
+      }
+      if (panel) {
+        panel.classList.add('opacity-0', '-translate-y-2', 'scale-95');
+        panel.classList.remove('opacity-100', 'translate-y-0', 'scale-100');
+      }
+    } catch {}
+
+    window.setTimeout(() => {
+      try { modal.classList.add('hidden'); } catch {}
+      try { if (typeof afterClose === 'function') afterClose(); } catch {}
+    }, 210);
+  }
+
   // Smooth, burst-friendly chat autoscroll.
   const __vixoScrollAnim = {
     raf: null,
@@ -439,12 +542,12 @@
     if (!btn || !dropdown) return;
 
     function open() {
-      dropdown.classList.remove('hidden');
+      __vixoAnimateDropdownOpen(dropdown, { withTransform: true });
       btn.setAttribute('aria-expanded', 'true');
     }
 
     function close() {
-      dropdown.classList.add('hidden');
+      __vixoAnimateDropdownClose(dropdown, { withTransform: true });
       btn.setAttribute('aria-expanded', 'false');
     }
 
@@ -470,12 +573,12 @@
     if (!btn || !dropdown) return;
 
     function open() {
-      dropdown.classList.remove('hidden');
+      __vixoAnimateDropdownOpen(dropdown, { withTransform: true });
       btn.setAttribute('aria-expanded', 'true');
     }
 
     function close() {
-      dropdown.classList.add('hidden');
+      __vixoAnimateDropdownClose(dropdown, { withTransform: true });
       btn.setAttribute('aria-expanded', 'false');
     }
 
@@ -495,6 +598,8 @@
 
   function initCustomConfirm() {
     const modal = document.getElementById('confirm-modal');
+    const backdrop = document.getElementById('confirm-backdrop');
+    const panel = document.getElementById('confirm-panel');
     const titleEl = document.getElementById('confirm-title');
     const msgEl = document.getElementById('confirm-message');
     const okBtn = document.getElementById('confirm-ok');
@@ -521,14 +626,14 @@
       okBtn.textContent = (okText || 'Yes');
       cancelBtn.textContent = (cancelText || 'Cancel');
 
-      modal.classList.remove('hidden');
-      modal.setAttribute('aria-hidden', 'false');
+      // Fallback: if backdrop/panel aren't present, this still works.
+      __vixoModalOpen(modal, backdrop, panel);
     };
 
     const close = () => {
-      modal.classList.add('hidden');
-      modal.setAttribute('aria-hidden', 'true');
-      pendingAction = null;
+      __vixoModalClose(modal, backdrop, panel, () => {
+        pendingAction = null;
+      });
     };
 
     okBtn.addEventListener('click', () => {
@@ -538,7 +643,7 @@
     });
     cancelBtn.addEventListener('click', close);
     modal.addEventListener('click', (e) => {
-      if (e.target === modal || e.target === modal.firstElementChild) close();
+      if (e.target === modal || (backdrop && e.target === backdrop)) close();
     });
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') close();
@@ -588,6 +693,95 @@
 
     window.__openConfirm = open;
     window.__closeConfirm = close;
+  }
+
+  function initPromptModal() {
+    const modal = document.getElementById('prompt-modal');
+    const backdrop = document.getElementById('prompt-backdrop');
+    const panel = document.getElementById('prompt-panel');
+    const titleEl = document.getElementById('prompt-title');
+    const msgEl = document.getElementById('prompt-message');
+    const inputEl = document.getElementById('prompt-input');
+    const okBtn = document.getElementById('prompt-ok');
+    const cancelBtn = document.getElementById('prompt-cancel');
+
+    if (!modal || !titleEl || !inputEl || !okBtn || !cancelBtn) return;
+
+    let pendingResolve = null;
+    let isOpen = false;
+
+    const open = ({ title, message, defaultValue, placeholder, okText, cancelText } = {}) => {
+      titleEl.textContent = title || 'Enter value';
+
+      const msg = String(message || '').trim();
+      if (msgEl) {
+        msgEl.textContent = msg;
+        msgEl.classList.toggle('hidden', !msg);
+      }
+
+      inputEl.value = (defaultValue === undefined || defaultValue === null) ? '' : String(defaultValue);
+      if (placeholder !== undefined && placeholder !== null) {
+        try { inputEl.setAttribute('placeholder', String(placeholder)); } catch {}
+      }
+      okBtn.textContent = okText || 'OK';
+      cancelBtn.textContent = cancelText || 'Cancel';
+
+      __vixoModalOpen(modal, backdrop, panel);
+      isOpen = true;
+
+      window.setTimeout(() => {
+        try {
+          inputEl.focus();
+          inputEl.select();
+        } catch {}
+      }, 0);
+    };
+
+    const close = (value) => {
+      if (!isOpen) return;
+      isOpen = false;
+      __vixoModalClose(modal, backdrop, panel, () => {
+        const r = pendingResolve;
+        pendingResolve = null;
+        try {
+          if (typeof r === 'function') r(value);
+        } catch {}
+      });
+    };
+
+    okBtn.addEventListener('click', () => {
+      close(String(inputEl.value || ''));
+    });
+    cancelBtn.addEventListener('click', () => close(null));
+
+    inputEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        try { e.preventDefault(); } catch {}
+        close(String(inputEl.value || ''));
+      }
+      if (e.key === 'Escape') {
+        try { e.preventDefault(); } catch {}
+        close(null);
+      }
+    });
+
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal || (backdrop && e.target === backdrop)) close(null);
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (!isOpen) return;
+      if (e.key === 'Escape') close(null);
+    });
+
+    window.__openPrompt = open;
+    window.__closePrompt = () => close(null);
+    window.__vixoPrompt = (opts) => {
+      return new Promise((resolve) => {
+        pendingResolve = resolve;
+        open(opts || {});
+      });
+    };
   }
 
   function initPremiumUpgradePopup() {
@@ -768,9 +962,69 @@
     // Lets chat pages know a global handler exists (avoid duplicate toasts)
     window.__hasGlobalCallInvite = true;
     window.__hasGlobalMentionNotify = true;
+    window.__hasGlobalOnlineStatus = true;
 
     const wsScheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
     const wsUrl = `${wsScheme}://${window.location.host}/ws/notify/`;
+    const wsOnlineUrl = `${wsScheme}://${window.location.host}/ws/online-status/`;
+    const __WS_HEARTBEAT_MS = 25_000;
+    const __WS_RECONNECT_BASE_MS = 900;
+    const __WS_RECONNECT_FACTOR = 1.7;
+    const __WS_RECONNECT_MAX_MS = 30_000;
+
+    // Maintain a global online presence socket (no UI needed here).
+    (function connectOnlineStatus() {
+      let onlineSocket;
+      let pingTimer;
+      let reconnectTimer;
+      let attempt = 0;
+
+      const stopPing = () => {
+        try { if (pingTimer) clearInterval(pingTimer); } catch {}
+        pingTimer = null;
+      };
+
+      const scheduleReconnect = () => {
+        if (reconnectTimer) return;
+        const a = Math.min(30, Math.max(0, attempt));
+        attempt = a + 1;
+        let delay = Math.min(__WS_RECONNECT_MAX_MS, Math.round(__WS_RECONNECT_BASE_MS * Math.pow(__WS_RECONNECT_FACTOR, a)));
+        delay = Math.round(delay * (0.7 + Math.random() * 0.6));
+        try { if (document.visibilityState === 'hidden') delay = Math.max(delay, 5000); } catch {}
+        reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, delay);
+      };
+
+      const connect = () => {
+        try {
+          onlineSocket = new WebSocket(wsOnlineUrl);
+        } catch {
+          return;
+        }
+
+        attempt = 0;
+        stopPing();
+        pingTimer = setInterval(() => {
+          try {
+            if (!onlineSocket || onlineSocket.readyState !== WebSocket.OPEN) return;
+            onlineSocket.send(JSON.stringify({ type: 'ping' }));
+          } catch {}
+        }, __WS_HEARTBEAT_MS);
+
+        onlineSocket.onmessage = () => {
+          // Server may send rendered HTML for legacy sidebar widgets; ignore.
+        };
+
+        onlineSocket.onclose = () => {
+          stopPing();
+          try {
+            if (document.visibilityState === 'hidden') return;
+          } catch {}
+          scheduleReconnect();
+        };
+      };
+
+      connect();
+    })();
 
     let audioCtx = null;
     let ringTimer = null;
@@ -1326,7 +1580,8 @@
       }
 
       const open = () => {
-        panel.classList.remove('hidden');
+        // Opacity-only animation here: this panel may use style.transform for viewport clamping.
+        __vixoAnimateDropdownOpen(panel, { withTransform: false });
         btn.setAttribute('aria-expanded', 'true');
         setTimeout(clampPanelToViewport, 0);
         try {
@@ -1338,7 +1593,7 @@
       };
 
       const close = () => {
-        panel.classList.add('hidden');
+        __vixoAnimateDropdownClose(panel, { withTransform: false });
         btn.setAttribute('aria-expanded', 'false');
         try { panel.style.transform = ''; } catch {}
       };
@@ -1432,11 +1687,38 @@
 
     function connect() {
       let socket;
+      let pingTimer;
+      let reconnectTimer;
+      let attempt = 0;
+
+      const stopPing = () => {
+        try { if (pingTimer) clearInterval(pingTimer); } catch {}
+        pingTimer = null;
+      };
+
+      const scheduleReconnect = () => {
+        if (reconnectTimer) return;
+        const a = Math.min(30, Math.max(0, attempt));
+        attempt = a + 1;
+        let delay = Math.min(__WS_RECONNECT_MAX_MS, Math.round(__WS_RECONNECT_BASE_MS * Math.pow(__WS_RECONNECT_FACTOR, a)));
+        delay = Math.round(delay * (0.7 + Math.random() * 0.6));
+        try { if (document.visibilityState === 'hidden') delay = Math.max(delay, 5000); } catch {}
+        reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, delay);
+      };
       try {
         socket = new WebSocket(wsUrl);
       } catch {
         return;
       }
+
+      attempt = 0;
+      stopPing();
+      pingTimer = setInterval(() => {
+        try {
+          if (!socket || socket.readyState !== WebSocket.OPEN) return;
+          socket.send(JSON.stringify({ type: 'ping' }));
+        } catch {}
+      }, __WS_HEARTBEAT_MS);
 
       socket.onmessage = function (event) {
         let payload;
@@ -1524,7 +1806,8 @@
       };
 
       socket.onclose = function () {
-        setTimeout(connect, 1200);
+        stopPing();
+        scheduleReconnect();
       };
     }
 
@@ -1682,6 +1965,95 @@
     }
   }
 
+  function initGlobalAnnouncementSocket() {
+    const banner = document.getElementById('global-announcement-banner');
+    if (!banner) return;
+
+    // Prevent duplicates (in case this script is loaded twice).
+    if (window.__globalAnnouncementSocketStarted) return;
+    window.__globalAnnouncementSocketStarted = true;
+
+    const wsScheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    const wsUrl = `${wsScheme}://${window.location.host}/ws/global-announcement/`;
+
+    const __WS_HEARTBEAT_MS = 25_000;
+    const __WS_RECONNECT_BASE_MS = 900;
+    const __WS_RECONNECT_FACTOR = 1.7;
+    const __WS_RECONNECT_MAX_MS = 30_000;
+
+    let __gaPingTimer = null;
+    let __gaReconnectTimer = null;
+    let __gaAttempt = 0;
+
+    const __gaStopPing = () => {
+      try { if (__gaPingTimer) clearInterval(__gaPingTimer); } catch {}
+      __gaPingTimer = null;
+    };
+
+    const __gaScheduleReconnect = (connectFn) => {
+      if (__gaReconnectTimer) return;
+      const a = Math.min(30, Math.max(0, __gaAttempt));
+      __gaAttempt = a + 1;
+      let delay = Math.min(__WS_RECONNECT_MAX_MS, Math.round(__WS_RECONNECT_BASE_MS * Math.pow(__WS_RECONNECT_FACTOR, a)));
+      delay = Math.round(delay * (0.7 + Math.random() * 0.6));
+      try { if (document.visibilityState === 'hidden') delay = Math.max(delay, 5000); } catch {}
+      __gaReconnectTimer = setTimeout(() => { __gaReconnectTimer = null; connectFn(); }, delay);
+    };
+
+    const applyState = (active, message) => {
+      const text = String(message || '');
+      const shouldShow = Boolean(active) && text.trim().length > 0;
+
+      try {
+        banner.querySelectorAll('.global-announcement-msg').forEach((el) => {
+          el.textContent = text;
+        });
+      } catch {
+        // ignore
+      }
+
+      try {
+        if (shouldShow) banner.classList.remove('hidden');
+        else banner.classList.add('hidden');
+      } catch {
+        // ignore
+      }
+    };
+
+    (function connectGlobalAnnouncement() {
+      let socket;
+      try {
+        socket = new WebSocket(wsUrl);
+      } catch {
+        return;
+      }
+
+      __gaAttempt = 0;
+      __gaStopPing();
+      __gaPingTimer = setInterval(() => {
+        try {
+          if (!socket || socket.readyState !== WebSocket.OPEN) return;
+          socket.send(JSON.stringify({ type: 'ping' }));
+        } catch {}
+      }, __WS_HEARTBEAT_MS);
+
+      socket.onmessage = (event) => {
+        let payload;
+        try { payload = JSON.parse(event.data); } catch { return; }
+        if (!payload || payload.type !== 'global_announcement') return;
+        applyState(payload.active, payload.message);
+      };
+
+      socket.onclose = () => {
+        __gaStopPing();
+        try {
+          if (document.visibilityState === 'hidden') return;
+        } catch {}
+        __gaScheduleReconnect(connectGlobalAnnouncement);
+      };
+    })();
+  }
+
   document.addEventListener('DOMContentLoaded', () => {
     const baseCfg = readJsonScript('vixo-config') || {};
 
@@ -1691,11 +2063,13 @@
     initUserMenuDropdown();
     initToasts();
     initCustomConfirm();
+    initPromptModal();
     initPremiumUpgradePopup();
     initImageViewer();
     initVideoViewer();
     initVideoDecodeFallback();
     initHtmxConfirmBridge();
+    initGlobalAnnouncementSocket();
 
     document.body.addEventListener('htmx:configRequest', (event) => {
       event.detail.headers['X-CSRFToken'] = getCookie('csrftoken');

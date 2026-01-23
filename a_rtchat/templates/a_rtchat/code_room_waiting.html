@@ -1,0 +1,85 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block html_class %}vixo-chat-page{% endblock %}
+{% block body_class %}vixo-chat-page{% endblock %}
+
+{% block content %}
+<div class="max-w-xl mx-auto px-4 py-10">
+  <div class="rounded-2xl border border-gray-800 bg-gray-900/60 shadow-2xl overflow-hidden">
+    <div class="px-5 py-4 border-b border-gray-800 flex items-center justify-between gap-3">
+      <div class="min-w-0">
+        <div class="text-sm font-semibold text-gray-100">Waiting for approval</div>
+        <div class="mt-1 text-xs text-gray-300 truncate">
+          Room: {{ chat_group.code_room_name|default:chat_group.room_code|default:chat_group.group_name }}
+        </div>
+      </div>
+      <div class="text-2xl" aria-hidden="true">⏳</div>
+    </div>
+
+    <div class="px-5 py-5">
+      <p class="text-sm text-gray-200">Your request is in the waiting list. The room admin will admit you soon.</p>
+      <div class="mt-4 flex items-center gap-2">
+        <div class="h-2 w-2 rounded-full bg-amber-400 animate-pulse" aria-hidden="true"></div>
+        <div id="waiting_status_text" class="text-xs text-gray-300">Checking status…</div>
+      </div>
+
+      <div class="mt-6 flex items-center justify-end gap-2">
+        <a href="{% url 'home' %}" class="text-xs bg-gray-800 hover:bg-gray-700 text-white px-3 py-2 rounded-lg transition-colors">Back</a>
+        <button type="button" id="waiting_refresh_btn" class="text-xs bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-2 rounded-lg transition-colors">Refresh</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+{{ status_url|json_script:"cr_wait_status" }}
+{{ redirect_url|json_script:"cr_wait_redirect" }}
+
+<script>
+(function(){
+  function readJson(id){
+    try{ const el=document.getElementById(id); if(!el) return null; return JSON.parse(el.textContent||'null'); }catch{ return null; }
+  }
+
+  const _statusUrl = readJson('cr_wait_status') || '';
+  const _redirectUrl = readJson('cr_wait_redirect') || '';
+  const textEl = document.getElementById('waiting_status_text');
+  const btn = document.getElementById('waiting_refresh_btn');
+
+  async function check(){
+    if(!_statusUrl) return;
+    try{
+      const r = await fetch(_statusUrl, { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+      const data = await r.json();
+      if(!data || !data.ok) return;
+
+      if(data.status === 'admitted'){
+        if(textEl) textEl.textContent = 'Admitted! Opening chat…';
+        window.location.href = data.redirect || _redirectUrl || window.location.href;
+        return;
+      }
+      if(data.status === 'pending'){
+        if(textEl) textEl.textContent = 'Still waiting…';
+        return;
+      }
+      if(data.status === 'not_found'){
+        if(textEl) textEl.textContent = 'Request not found. Please re-join with the room code.';
+        return;
+      }
+    }catch{
+      if(textEl) textEl.textContent = 'Network issue… retrying';
+    }
+  }
+
+  let timer = null;
+  function start(){
+    if(timer) clearInterval(timer);
+    check();
+    timer = setInterval(check, 2000);
+  }
+
+  if(btn) btn.addEventListener('click', () => { check(); });
+  start();
+})();
+</script>
+{% endblock %}

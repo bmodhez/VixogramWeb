@@ -93,3 +93,17 @@ def mobile_ads_config(request):
             'MOBILE_AD_CHAT_LIST': {},
             'MOBILE_AD_CHAT_FEED': {},
         }
+
+
+def global_announcement(request):
+    """Expose the current active global announcement (staff-set) to templates."""
+    try:
+        from a_rtchat.models import GlobalAnnouncement
+
+        ann = GlobalAnnouncement.objects.filter(is_active=True).order_by('-updated_at').first()
+        msg = (getattr(ann, 'message', '') or '').strip()
+        if not msg:
+            return {'GLOBAL_ANNOUNCEMENT_MESSAGE': ''}
+        return {'GLOBAL_ANNOUNCEMENT_MESSAGE': msg}
+    except Exception:
+        return {'GLOBAL_ANNOUNCEMENT_MESSAGE': ''}
