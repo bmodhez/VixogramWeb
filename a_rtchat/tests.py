@@ -3,9 +3,12 @@ from django.test import TestCase
 from django.urls import reverse
 from django.contrib.messages import get_messages
 from django.utils import timezone
+from django.core.files.uploadedfile import SimpleUploadedFile
 from datetime import timedelta
+import base64
 
-from .models import ChatGroup, CodeRoomJoinRequest
+from .models import ChatGroup, CodeRoomJoinRequest, GroupMessage, OneTimeMessageView
+from .retention import trim_chat_group_messages
 
 
 class AdminToggleUserBlockTests(TestCase):
@@ -179,3 +182,74 @@ class CodeRoomWaitingListTests(TestCase):
 
 		jr.refresh_from_db()
 		self.assertGreater(jr.last_seen_at, past)
+
+
+class MessageRetentionTests(TestCase):
+	def test_room_keeps_only_latest_100_messages(self):
+		owner = User.objects.create_user(username='owner_ret', password='pass12345')
+		room = ChatGroup.objects.create(is_private=False, admin=owner)
+
+		# Create 105 messages (ids increase with creation order)
+		for i in range(105):
+			GroupMessage.objects.create(group=room, author=owner, body=f'm{i}')
+
+		self.assertEqual(GroupMessage.objects.filter(group=room).count(), 105)
+
+		trim_chat_group_messages(chat_group_id=room.id, keep_last=100)
+
+		qs = GroupMessage.objects.filter(group=room).order_by('id')
+		self.assertEqual(qs.count(), 100)
+		remaining_bodies = list(qs.values_list('body', flat=True)[:6])
+		self.assertEqual(remaining_bodies[0], 'm5')
+
+
+class OneTimeViewTests(TestCase):
+	def _png_file(self):
+		# 1x1 transparent PNG
+		data = base64.b64decode(
+			'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO5kZpQAAAAASUVORK5CYII='
+		)
+		return SimpleUploadedFile('t.png', data, content_type='image/png')
+
+	def test_recipient_can_open_once(self):
+		sender = User.objects.create_user(username='ot_sender', password='pass12345')
+		recipient = User.objects.create_user(username='ot_recipient', password='pass12345')
+		room = ChatGroup.objects.create(is_private=True, admin=sender)
+		room.members.add(sender, recipient)
+
+		msg = GroupMessage.objects.create(
+			group=room,
+			author=sender,
+			file=self._png_file(),
+			one_time_view_seconds=3,
+		)
+
+		self.client.force_login(recipient)
+		url = reverse('message-one-time-open', kwargs={'message_id': msg.id})
+		resp = self.client.post(url)
+		self.assertEqual(resp.status_code, 200)
+		data = resp.json()
+		self.assertTrue(data.get('ok'))
+
+		self.assertTrue(OneTimeMessageView.objects.filter(message=msg, user=recipient).exists())
+
+		# Second open should be blocked.
+		resp2 = self.client.post(url)
+		self.assertEqual(resp2.status_code, 410)
+
+	def test_sender_cannot_open(self):
+		sender = User.objects.create_user(username='ot_sender2', password='pass12345')
+		recipient = User.objects.create_user(username='ot_recipient2', password='pass12345')
+		room = ChatGroup.objects.create(is_private=True, admin=sender)
+		room.members.add(sender, recipient)
+		msg = GroupMessage.objects.create(
+			group=room,
+			author=sender,
+			file=self._png_file(),
+			one_time_view_seconds=8,
+		)
+
+		self.client.force_login(sender)
+		url = reverse('message-one-time-open', kwargs={'message_id': msg.id})
+		resp = self.client.post(url)
+		self.assertEqual(resp.status_code, 403)

@@ -1,0 +1,64 @@
+{% load static %}
+
+<div class="fixed inset-0 z-[60]" role="dialog" aria-modal="true" aria-label="Report user">
+    <div class="absolute inset-0 bg-black/60 vixo-modal-overlay" data-modal-backdrop></div>
+
+    <div class="relative min-h-full flex items-center justify-center px-4 py-8 pointer-events-none">
+        <div class="w-full max-w-md pointer-events-auto vixo-modal-card">
+            <div class="rounded-2xl shadow-2xl border border-white/10 overflow-hidden bg-gray-900/95">
+                <div class="flex items-center justify-between gap-3 px-5 py-4 border-b border-gray-800">
+                    <div>
+                        <h1 class="text-base sm:text-lg font-extrabold text-white">Report @{{ target_user.username }}</h1>
+                        <p class="text-xs text-gray-400 mt-0.5">Tell us what’s going on. We’ll review it.</p>
+                    </div>
+                    <button type="button" data-modal-close class="bg-gray-800 hover:bg-gray-700 text-white rounded-lg px-4 py-2 transition-colors text-xs sm:text-sm">
+                        Back
+                    </button>
+                </div>
+
+                <form
+                    method="post"
+                    action="{% url 'report-user' target_user.username %}"
+                    hx-post="{% url 'report-user' target_user.username %}?modal=1"
+                    hx-target="#global_modal_root"
+                    hx-swap="innerHTML"
+                    hx-push-url="false"
+                    class="px-5 py-5 space-y-4"
+                    data-loading-text="Submitting…"
+                >
+                    {% csrf_token %}
+
+                    {% if form.non_field_errors %}
+                        <div class="text-sm text-red-300 bg-gray-950/40 border border-gray-800 rounded-xl px-4 py-3">
+                            {{ form.non_field_errors }}
+                        </div>
+                    {% endif %}
+
+                    <div>
+                        <label class="block text-sm text-gray-300 mb-2">Reason</label>
+                        {{ form.reason }}
+                        {% if form.reason.errors %}
+                            <div class="text-xs text-red-400 mt-1">{{ form.reason.errors|first }}</div>
+                        {% endif %}
+                    </div>
+
+                    <div>
+                        <label class="block text-sm text-gray-300 mb-2">Details (optional)</label>
+                        {{ form.details }}
+                        {% if form.details.errors %}
+                            <div class="text-xs text-red-400 mt-1">{{ form.details.errors|first }}</div>
+                        {% endif %}
+                    </div>
+
+                    <button type="submit" class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-2.5 px-6 rounded-lg transition-colors">
+                        Submit report
+                    </button>
+
+                    <p class="text-xs text-gray-500">
+                        Please don’t misuse reports. False reporting may lead to action on your account.
+                    </p>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>

@@ -56,3 +56,23 @@ def recaptcha_config(request):
         'RECAPTCHA_SITE_KEY_LOOKS_VALID': bool(site_key.startswith('6L')),
         'RECAPTCHA_DEBUG': bool(getattr(settings, 'DEBUG', False)),
     }
+
+
+def welcome_popup(request):
+    """Expose a one-time welcome popup flag.
+
+    Reads request.session['show_welcome_popup'] and clears it after consumption
+    so the popup displays only once after login/signup.
+    """
+    try:
+        sess = getattr(request, 'session', None)
+        if not sess:
+            return {'SHOW_WELCOME_POPUP': False}
+
+        show = bool(sess.get('show_welcome_popup'))
+        if show:
+            sess.pop('show_welcome_popup', None)
+            sess.pop('welcome_popup_source', None)
+        return {'SHOW_WELCOME_POPUP': show}
+    except Exception:
+        return {'SHOW_WELCOME_POPUP': False}

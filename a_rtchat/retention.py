@@ -3,7 +3,7 @@ from __future__ import annotations
 from django.core.cache import cache
 
 
-def trim_chat_group_messages(*, chat_group_id: int, keep_last: int = 12000) -> None:
+def trim_chat_group_messages(*, chat_group_id: int, keep_last: int = 900) -> None:
     """Best-effort: keep only the newest `keep_last` messages for a room.
 
     This runs throttled because deleting can be expensive.
@@ -16,9 +16,18 @@ def trim_chat_group_messages(*, chat_group_id: int, keep_last: int = 12000) -> N
     if gid <= 0:
         return
 
+    try:
+        keep_last = int(keep_last)
+    except Exception:
+        return
+
+    if keep_last <= 0:
+        return
+
     # Throttle trims per room.
     try:
-        if not cache.add(f"msg_trim_lock:{gid}", "1", timeout=10):
+        # Keep this short so a busy room trims promptly.
+        if not cache.add(f"msg_trim_lock:{gid}", "1", timeout=2):
             return
     except Exception:
         # If cache isn't configured, still attempt trimming (best-effort).

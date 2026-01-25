@@ -266,6 +266,97 @@
         }
     }
 
+    function initMaintenanceAdminToggle() {
+        const toggle = document.getElementById('vixo-maintenance-toggle');
+        if (!toggle) return;
+
+        const stateEl = document.getElementById('vixo-maintenance-state');
+        const hintEl = document.getElementById('vixo-maintenance-hint');
+        const baseCfg = readJsonScript('vixo-config') || {};
+
+        const statusUrl = String(baseCfg.maintenanceStatusUrl || '');
+        const toggleUrl = String(baseCfg.maintenanceToggleUrl || '');
+        if (!statusUrl || !toggleUrl) return;
+
+        function setHint(msg, isError) {
+            if (!hintEl) return;
+            const m = String(msg || '').trim();
+            if (!m) {
+                hintEl.classList.add('hidden');
+                hintEl.textContent = '';
+                hintEl.classList.remove('text-red-300');
+                return;
+            }
+            hintEl.textContent = m;
+            hintEl.classList.remove('hidden');
+            hintEl.classList.toggle('text-red-300', !!isError);
+        }
+
+        function setState(enabled) {
+            toggle.checked = !!enabled;
+            if (stateEl) stateEl.textContent = enabled ? 'On' : 'Off';
+        }
+
+        function setBusy(busy) {
+            toggle.disabled = !!busy;
+            toggle.style.opacity = busy ? '0.65' : '';
+            if (stateEl && busy) stateEl.textContent = '…';
+        }
+
+        async function refresh() {
+            setBusy(true);
+            setHint('');
+            try {
+                const res = await fetch(statusUrl, { credentials: 'same-origin', cache: 'no-store', headers: { 'Accept': 'application/json' } });
+                const data = res.ok ? await res.json() : null;
+                setState(!!(data && data.enabled));
+            } catch {
+                setHint('Could not load maintenance status.', true);
+            } finally {
+                setBusy(false);
+            }
+        }
+
+        toggle.addEventListener('change', async () => {
+            const nextEnabled = !!toggle.checked;
+            setBusy(true);
+            setHint('');
+            try {
+                const body = new URLSearchParams();
+                body.set('enabled', nextEnabled ? '1' : '0');
+                const csrf = (typeof getCookie === 'function' ? getCookie('csrftoken') : '') || '';
+
+                const res = await fetch(toggleUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+                        'X-CSRFToken': csrf,
+                        'X-Requested-With': 'XMLHttpRequest',
+                    },
+                    body,
+                    credentials: 'same-origin',
+                });
+
+                const data = res.ok ? await res.json() : null;
+                if (!data || !data.ok) {
+                    throw new Error('toggle failed');
+                }
+
+                setState(!!data.enabled);
+                setHint(data.enabled ? 'Maintenance enabled: users will be redirected.' : 'Maintenance disabled.', false);
+                window.setTimeout(() => setHint(''), 2500);
+            } catch {
+                // Revert UI to actual state
+                await refresh();
+                setHint('Could not update maintenance mode.', true);
+            } finally {
+                setBusy(false);
+            }
+        });
+
+        refresh();
+    }
+
     const cfg = (window.__vixo_chat_config && typeof window.__vixo_chat_config === 'object')
         ? window.__vixo_chat_config
         : (readJsonScript('vixo-chat-config') || {});
@@ -277,10 +368,12 @@
             document.addEventListener('DOMContentLoaded', () => {
                 initRoomCodeCopy();
                 initRoomShareHint();
+                initMaintenanceAdminToggle();
             }, { once: true });
         } else {
             initRoomCodeCopy();
             initRoomShareHint();
+            initMaintenanceAdminToggle();
         }
     } catch {
         // ignore
@@ -1085,8 +1178,56 @@
         resetComposerAfterSend();
     });
 
+    // If HTMX send is rate-limited, show the realtime cooldown countdown.
+    document.body.addEventListener('htmx:responseError', (event) => {
+        const form = document.getElementById('chat_message_form');
+        if (!form) return;
+        if (!event || event.target !== form) return;
+        const xhr = event.detail ? event.detail.xhr : null;
+        const status = xhr ? Number(xhr.status || 0) : 0;
+        if (status !== 429) return;
+        let retry = 0;
+        try {
+            retry = parseInt(xhr.getResponseHeader('Retry-After') || '0', 10) || 0;
+        } catch {
+            retry = 0;
+        }
+        if (typeof startSendCooldown === 'function') startSendCooldown(retry || 10);
+    });
+
+    function ensureChatFeedVisible() {
+        const messagesEl = document.getElementById('chat_messages');
+        if (messagesEl && messagesEl.classList.contains('hidden')) {
+            messagesEl.classList.remove('hidden');
+        }
+        const emptyEl = document.getElementById('empty_state');
+        if (emptyEl) {
+            try { emptyEl.remove(); } catch { emptyEl.classList.add('hidden'); }
+        }
+    }
+
+    // When HTMX appends the first message into an empty chat, the <ul> was initially hidden.
+    // Ensure it becomes visible right after swap.
+    document.body.addEventListener('htmx:afterSwap', (event) => {
+        const target = event && event.detail ? event.detail.target : null;
+        if (!target) return;
+        if (target.id !== 'chat_messages') return;
+        ensureChatFeedVisible();
+        try {
+            hydrateLocalTimes(target);
+            applyConsecutiveHeaderGrouping(target);
+            updateLastIdFromDom();
+        } catch {
+            // ignore
+        }
+        window.__forceNextChatScroll = true;
+        try { __chatAutoScrollEnabled = true; } catch {}
+        try { forceScrollToBottomNow(); } catch {}
+    });
+
     // Explicit marker from server after a file upload; ensure the file chooser is cleared.
     document.body.addEventListener('chatFileUploaded', () => {
+        ensureChatFeedVisible();
         resetComposerAfterSend();
     });
 
@@ -1317,6 +1458,7 @@
         const fileInput = document.getElementById('chat_file_input');
         const uploadBtn = document.getElementById('chat_upload_btn');
         const captionInput = document.getElementById('chat_file_caption');
+        const oneTimeInput = document.getElementById('chat_one_time_seconds');
         const msgInput = (msgForm && msgForm.querySelector('[name="body"]')) || document.getElementById('id_body');
 
         const modal = document.getElementById('upload_modal');
@@ -1328,6 +1470,10 @@
         const modalVideo = document.getElementById('upload_modal_video');
         const modalCaption = document.getElementById('upload_modal_caption');
         const modalHint = document.getElementById('upload_modal_hint');
+
+        const oneTimeBtn = document.getElementById('upload_one_time_btn');
+        const oneTimePanel = document.getElementById('upload_one_time_panel');
+        const oneTimeBadge = document.getElementById('upload_one_time_badge');
 
         if (!msgForm || !fileInput) return;
 
@@ -1353,9 +1499,52 @@
             try { fileInput.value = ''; } catch {}
         }
 
+        function closeOneTimePanel() {
+            if (!oneTimePanel) return;
+            oneTimePanel.classList.add('opacity-0', 'scale-95', 'pointer-events-none');
+            oneTimePanel.classList.remove('opacity-100', 'scale-100', 'pointer-events-auto');
+            window.setTimeout(() => {
+                try { oneTimePanel.classList.add('hidden'); } catch {}
+            }, 160);
+        }
+
+        function openOneTimePanel() {
+            if (!oneTimePanel) return;
+            oneTimePanel.classList.remove('hidden');
+            // next tick for transition
+            window.requestAnimationFrame(() => {
+                oneTimePanel.classList.remove('opacity-0', 'scale-95', 'pointer-events-none');
+                oneTimePanel.classList.add('opacity-100', 'scale-100', 'pointer-events-auto');
+            });
+        }
+
+        function setOneTimeSeconds(raw) {
+            const v = (raw === null || raw === undefined) ? '' : String(raw).trim();
+            if (oneTimeInput) oneTimeInput.value = v;
+            if (oneTimeBadge) {
+                if (v) {
+                    oneTimeBadge.textContent = `1× ${v}s`;
+                    oneTimeBadge.classList.remove('hidden');
+                } else {
+                    oneTimeBadge.classList.add('hidden');
+                    oneTimeBadge.textContent = '1×';
+                }
+            }
+        }
+
+        function setOneTimeEnabled(enabled) {
+            if (!oneTimeBtn) return;
+            oneTimeBtn.disabled = !enabled;
+            oneTimeBtn.classList.toggle('opacity-50', !enabled);
+            oneTimeBtn.classList.toggle('cursor-not-allowed', !enabled);
+            if (!enabled) closeOneTimePanel();
+            if (!enabled) setOneTimeSeconds('');
+        }
+
         function closeModal(opts) {
             const options = opts || {};
             modalOpen = false;
+            closeOneTimePanel();
             cleanupCropper();
             cleanupPreviewUrl();
             if (modalImg) {
@@ -1373,6 +1562,7 @@
 
             if (options.clearFile) {
                 if (captionInput) captionInput.value = '';
+                if (oneTimeInput) oneTimeInput.value = '';
                 clearSelectedFile();
             }
         }
@@ -1387,6 +1577,9 @@
             cleanupPreviewUrl();
             if (modalHint) modalHint.textContent = '';
 
+            // Default to off for each new preview.
+            setOneTimeSeconds('');
+
             // Prefill caption from existing caption or from message body (matches previous behavior).
             const existingCap = (captionInput && captionInput.value ? String(captionInput.value) : '').trim();
             const bodyText = (msgInput && msgInput.value ? String(msgInput.value) : '').trim();
@@ -1400,6 +1593,8 @@
 
             const isImage = /^image\//i.test(file.type || '');
             const isVideo = /^video\//i.test(file.type || '');
+
+            setOneTimeEnabled(!!isImage);
 
             if (isImage) {
                 modalVideo.classList.add('hidden');
@@ -1535,6 +1730,39 @@
         function wireModal() {
             if (!modal) return;
 
+            if (oneTimeBtn && oneTimePanel) {
+                oneTimeBtn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    if (oneTimeBtn.disabled) return;
+                    const isHidden = oneTimePanel.classList.contains('hidden');
+                    if (isHidden) openOneTimePanel();
+                    else closeOneTimePanel();
+                });
+
+                oneTimePanel.addEventListener('click', (e) => {
+                    const btn = e.target && e.target.closest ? e.target.closest('[data-one-time-seconds]') : null;
+                    if (!btn) return;
+                    const s = btn.getAttribute('data-one-time-seconds');
+                    // Only allow the fixed options (plus off).
+                    const allowed = new Set(['', '3', '8', '15']);
+                    const next = allowed.has(String(s || '')) ? String(s || '') : '';
+                    setOneTimeSeconds(next);
+                    closeOneTimePanel();
+                    if (modalHint) {
+                        if (next) modalHint.textContent = `One-time view enabled (${next}s). Recipient can open once.`;
+                        else modalHint.textContent = '';
+                    }
+                });
+
+                // Close panel when clicking outside.
+                document.addEventListener('click', (e) => {
+                    if (!modalOpen) return;
+                    if (oneTimePanel.classList.contains('hidden')) return;
+                    const inside = (e.target && e.target.closest) ? e.target.closest('#upload_one_time_panel, #upload_one_time_btn') : null;
+                    if (!inside) closeOneTimePanel();
+                }, true);
+            }
+
             if (modalBackdrop) {
                 modalBackdrop.addEventListener('click', (e) => {
                     e.preventDefault();
@@ -1557,6 +1785,7 @@
 
     // --- Link policy (links only allowed in private chats) ---
     const __linksAllowed = !!cfg.linksAllowed;
+    const __gifsAllowed = !!cfg.gifsAllowed;
     function __containsLink(text) {
         const s = (text || '').trim();
         if (!s) return false;
@@ -1567,6 +1796,37 @@
         const m = s.match(bare);
         if (!m) return false;
         return /[a-z]/i.test(m[0]);
+    }
+
+    function __isGifMessage(text) {
+        const s = String(text || '').trim();
+        if (!__gifsAllowed) return false;
+        if (!s.startsWith('[GIF]')) return false;
+        const url = s.slice(5).trim();
+        if (!(url.startsWith('http://') || url.startsWith('https://'))) return false;
+        return /giphy\.com|giphyusercontent\.com/i.test(url);
+    }
+
+    function __giphyMp4Url(url) {
+        const s = String(url || '').trim();
+        if (!s) return '';
+        const parts = s.split('?');
+        const base = parts[0] || '';
+        const q = parts.length > 1 ? ('?' + parts.slice(1).join('?')) : '';
+        if (/\.gif$/i.test(base)) return base.replace(/\.gif$/i, '.mp4') + q;
+        return base + q;
+    }
+
+    function __giphyStillUrl(url) {
+        const s = String(url || '').trim();
+        if (!s) return '';
+        const parts = s.split('?');
+        const base = parts[0] || '';
+        const q = parts.length > 1 ? ('?' + parts.slice(1).join('?')) : '';
+        if (/\/giphy\.gif$/i.test(base)) return base.replace(/\/giphy\.gif$/i, '/giphy_s.gif') + q;
+        // 200w.gif -> 200w_s.gif
+        if (/\/\d+w\.gif$/i.test(base)) return base.replace(/\/(\d+w)\.gif$/i, '/$1_s.gif') + q;
+        return base + q;
     }
 
     function __popup(title, message) {
@@ -1595,7 +1855,7 @@
         const captionInput = document.getElementById('chat_file_caption');
         const text = inUploadMode ? (captionInput && captionInput.value) : (bodyInput && bodyInput.value);
 
-        if (__containsLink(text || '')) {
+        if (__containsLink(text || '') && !__isGifMessage(text || '')) {
             event.preventDefault();
             event.stopPropagation();
             __popup('Links not allowed', 'Sending links is only allowed in private chats.');
@@ -1969,6 +2229,7 @@
 
                     if (res.status === 429) {
                         const retry = parseInt(res.headers.get('Retry-After') || '0', 10) || 0;
+                        if (typeof startSendCooldown === 'function') startSendCooldown(retry || 10);
                         if (typeof __popup === 'function') {
                             __popup('Slow down', retry ? `Please wait ${retry}s and try again.` : 'Please wait and try again.');
                         }
@@ -2031,7 +2292,8 @@
 
             // Mirror the link policy UX when skipping HTMX.
             if (typeof __linksAllowed !== 'undefined' && typeof __containsLink === 'function') {
-                if (!__linksAllowed && __containsLink(body)) {
+                const isGif = (typeof __isGifMessage === 'function') ? __isGifMessage(body) : false;
+                if (!__linksAllowed && __containsLink(body) && !isGif) {
                     e.preventDefault();
                     e.stopPropagation();
                     try { e.stopImmediatePropagation(); } catch {}
@@ -2074,13 +2336,28 @@
                                 if (emptyEl) emptyEl.remove();
                                 if (messagesEl && messagesEl.classList.contains('hidden')) messagesEl.classList.remove('hidden');
 
-                                const safe = __escapeHtml(body).replace(/\n/g, '<br>');
+                                const trimmed = String(body || '').trim();
+                                const isGifMsg = trimmed.startsWith('[GIF]');
+                                let bubbleInner = __escapeHtml(body).replace(/\n/g, '<br>');
+                                if (isGifMsg) {
+                                        const url = trimmed.slice(5).trim();
+                                        if (url) {
+                                        const safeUrl = __escapeHtml(url);
+                                        const mp4 = __escapeHtml(__giphyMp4Url(url));
+                                        const poster = __escapeHtml(__giphyStillUrl(url));
+                                        bubbleInner = `<div class="w-full sm:w-auto max-w-full sm:max-w-72">
+                  <video class="w-full h-auto rounded-lg bg-black/20" muted playsinline preload="metadata" poster="${poster}" data-gif-player data-gif-url="${safeUrl}" data-gif-loops="6">
+                    <source src="${mp4}" type="video/mp4" />
+                  </video>
+                </div>`;
+                                        }
+                                }
                                 const pendingHtml = `
 <div data-pending="1" data-client-nonce="${clientNonce}" class="vixo-msg group relative w-full flex justify-end opacity-90">
     <div class="flex flex-col items-end max-w-[90%] sm:max-w-[75%] lg:max-w-[65%]">
         <div class="flex items-end gap-2">
-            <div data-message-bubble class="relative px-4 py-3 rounded-2xl shadow-sm shadow-black/20 backdrop-blur-md bg-gradient-to-r from-purple-500 via-indigo-500 to-sky-500 text-white vixo-keep-white rounded-tr-none border border-white/10">
-                <div class="text-[15px] sm:text-[16px] leading-relaxed text-white/95 vixo-keep-white">${safe}</div>
+            <div data-message-bubble class="relative px-3 py-2.5 rounded-2xl shadow-sm shadow-black/20 backdrop-blur-md bg-gradient-to-r from-purple-500 via-indigo-500 to-sky-500 text-white vixo-keep-white rounded-tr-none border border-white/10">
+                <div class="text-[14px] sm:text-[15px] leading-relaxed text-white/95 vixo-keep-white">${bubbleInner}</div>
             </div>
         </div>
     </div>
@@ -2608,16 +2885,17 @@
                         if (pending) {
                             // Replace silently: temp hide, swap, reveal.
                             try {
-                                const wasAtBottom = messagesEl && messagesEl.lastElementChild === pending;
                                 pending.style.visibility = 'hidden';
                                 pending.insertAdjacentHTML('afterend', payload.html);
                                 const newEl = pending.nextElementSibling;
                                 pending.remove();
                                 if (newEl) newEl.style.visibility = 'visible';
-                                // Skip extra scroll if we're already at the bottom.
-                                if (wasAtBottom) window.__forceNextChatScroll = false;
                             } catch {}
                             __pendingByNonce.delete(nonce);
+
+                            // Replies are often sent while scrolled up; always jump to latest for your own send.
+                            // (The send handler sets this too, but keep it armed in case it was toggled.)
+                            window.__forceNextChatScroll = true;
                         } else {
                             messagesEl.insertAdjacentHTML('beforeend', payload.html);
                         }
@@ -2686,6 +2964,40 @@
                 return;
             }
 
+            if (payload.type === 'one_time_seen' && payload.message_id) {
+                const authorId = parseInt(payload.author_id || 0, 10) || 0;
+                if (authorId && authorId === currentUserId) {
+                    const mid = parseInt(payload.message_id || 0, 10) || 0;
+                    const msgEl = mid ? document.getElementById(`msg-${mid}`) : null;
+                    const slot = msgEl && msgEl.querySelector ? msgEl.querySelector('[data-one-time-sender-status]') : null;
+                    if (slot) {
+                        const viewerName = (payload.viewer_name || 'Someone').trim() || 'Someone';
+                        slot.innerHTML = `
+                            <div class="flex items-center gap-2">
+                                <span class="inline-flex h-2 w-2 rounded-full bg-emerald-400 motion-safe:animate-pulse" aria-hidden="true"></span>
+                                <span class="font-semibold">Disappearing image was seen</span>
+                                <span class="text-emerald-200/60">•</span>
+                                <span class="truncate text-emerald-200/80">${viewerName}</span>
+                            </div>
+                        `;
+                        try { slot.classList.remove('hidden'); } catch {}
+                        try { slot.classList.remove('opacity-0', 'translate-y-1'); } catch {}
+                        try { slot.classList.add('opacity-100'); } catch {}
+                        // Gentle entrance animation.
+                        try {
+                            slot.style.opacity = '0';
+                            slot.style.transform = 'translateY(4px)';
+                            slot.style.transition = 'opacity 220ms ease, transform 220ms ease';
+                            requestAnimationFrame(() => {
+                                try { slot.style.opacity = '1'; } catch {}
+                                try { slot.style.transform = 'translateY(0)'; } catch {}
+                            });
+                        } catch {}
+                    }
+                }
+                return;
+            }
+
             if (payload.type === 'typing') {
                 handleTypingEvent(payload);
                 return;
@@ -2693,6 +3005,12 @@
 
             if (payload.type === 'pong') {
                 // keepalive ack (no UI)
+                return;
+            }
+
+            if (payload.type === 'cooldown') {
+                const seconds = parseInt(payload.seconds || payload.retry_after || payload.muted_seconds || 0, 10) || 0;
+                if (seconds > 0 && typeof startSendCooldown === 'function') startSendCooldown(seconds);
                 return;
             }
 
@@ -3684,7 +4002,10 @@
         wsConnected = false;
         try {
             updateLastIdFromDom();
-            const res = await fetch(`${pollUrl}?after=${lastId}`, { credentials: 'same-origin' });
+            const res = await fetch(`${pollUrl}?after=${lastId}`, {
+                credentials: 'same-origin',
+                headers: { 'X-Vixo-No-Loading': '1' },
+            });
             if (!res.ok) return;
             const data = await res.json();
             if (data && typeof data.online_count !== 'undefined') {
@@ -4046,6 +4367,639 @@
             e.stopPropagation();
             openWith(src, el.getAttribute('alt') || 'Image');
         }, true);
+    })();
+
+    (function initOneTimeView() {
+        // Handles one-time photos:
+        // - Hidden bubble is rendered in HTML.
+        // - Clicking POSTs to server to record this viewer as having opened it.
+        // - Client shows photo with an animated countdown, then removes the message for this viewer.
+
+        const countdownTimers = new WeakMap();
+
+        function getCsrf() {
+            try { return (typeof getCookie === 'function' ? getCookie('csrftoken') : ''); } catch { return ''; }
+        }
+
+        function renderExpired(container) {
+            if (!container) return;
+            try {
+                container.innerHTML = '<div class="rounded-2xl border border-gray-700 bg-gray-900/40 px-4 py-4 text-sm text-gray-200" data-one-time-expired>Photo expired</div>';
+            } catch {}
+        }
+
+        function removeMessageForViewer(container) {
+            const msg = container && container.closest ? (container.closest('.vixo-msg') || container) : container;
+            if (!msg) return;
+            try {
+                msg.style.transition = 'opacity 200ms ease, transform 200ms ease';
+                msg.style.opacity = '0';
+                msg.style.transform = 'translateY(-4px)';
+            } catch {}
+            window.setTimeout(() => {
+                try { msg.remove(); } catch {}
+            }, 220);
+        }
+
+        function clearCountdown(container) {
+            const prev = countdownTimers.get(container);
+            if (!prev) return;
+            try { window.clearTimeout(prev.timeoutId); } catch {}
+            try { window.clearInterval(prev.intervalId); } catch {}
+            countdownTimers.delete(container);
+        }
+
+        function startCountdown(container, seconds, expiresAtSec) {
+            if (!container) return;
+            clearCountdown(container);
+
+            const endMs = ((expiresAtSec && expiresAtSec > 0) ? expiresAtSec : (Math.floor(Date.now() / 1000) + seconds)) * 1000;
+            let remaining = Math.max(0, Math.ceil((endMs - Date.now()) / 1000));
+            if (remaining <= 0) {
+                removeMessageForViewer(container);
+                return;
+            }
+
+            const label = container.querySelector('[data-one-time-remaining]');
+            const progress = container.querySelector('[data-one-time-progress]');
+            if (label) label.textContent = String(remaining);
+
+            // Animate progress bar from full -> empty.
+            try {
+                if (progress) {
+                    progress.style.width = '100%';
+                    progress.style.transition = `width ${remaining}s linear`;
+                    requestAnimationFrame(() => {
+                        try { progress.style.width = '0%'; } catch {}
+                    });
+                }
+            } catch {}
+
+            const intervalId = window.setInterval(() => {
+                remaining = Math.max(0, Math.ceil((endMs - Date.now()) / 1000));
+                if (label) label.textContent = String(remaining);
+            }, 250);
+
+            const timeoutId = window.setTimeout(() => {
+                clearCountdown(container);
+                removeMessageForViewer(container);
+            }, remaining * 1000);
+
+            countdownTimers.set(container, { intervalId, timeoutId });
+        }
+
+        async function openOneTime(btn) {
+            const container = btn.closest('[data-one-time-container]') || btn.parentElement;
+            if (!container) return;
+
+            const url = btn.getAttribute('data-one-time-open-url') || '';
+            const fileUrl = btn.getAttribute('data-one-time-file-url') || '';
+            const fallbackSeconds = parseInt(btn.getAttribute('data-one-time-seconds') || '0', 10) || 0;
+            if (!url || !fileUrl) return;
+
+            btn.disabled = true;
+            try {
+                const resp = await fetch(url, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: {
+                        'X-CSRFToken': getCsrf(),
+                        'X-Requested-With': 'XMLHttpRequest',
+                    },
+                });
+
+                const data = await resp.json().catch(() => null);
+                if (!resp.ok || !data || !data.ok) {
+                    renderExpired(container);
+                    return;
+                }
+
+                const seconds = parseInt(data.seconds || fallbackSeconds || '0', 10) || fallbackSeconds || 0;
+                const expiresAt = parseInt(data.expires_at || '0', 10) || 0;
+
+                container.innerHTML = `
+                    <div class="relative">
+                        <img class="w-full h-auto rounded-lg cursor-zoom-in" src="${fileUrl}" alt="Image" loading="lazy" data-image-viewer />
+                        <div class="absolute inset-0 pointer-events-none">
+                            <div class="absolute top-2 left-2 inline-flex items-center gap-2 rounded-full bg-black/60 border border-white/10 px-2.5 py-1 text-[11px] text-white">
+                                <span data-one-time-remaining>${seconds}</span><span>s</span>
+                            </div>
+                            <div class="absolute bottom-0 left-0 right-0 h-1 bg-white/10 rounded-b-lg overflow-hidden">
+                                <div data-one-time-progress class="h-full bg-emerald-400/80"></div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+
+                startCountdown(container, seconds, expiresAt);
+            } catch {
+                try { btn.disabled = false; } catch {}
+            }
+        }
+
+        document.addEventListener('click', (e) => {
+            const btn = e.target && e.target.closest ? e.target.closest('[data-one-time-open-btn]') : null;
+            if (!btn) return;
+            e.preventDefault();
+            e.stopPropagation();
+            openOneTime(btn);
+        }, true);
+    })();
+
+    (function initGifPicker() {
+        const gifsAllowed = !!cfg.gifsAllowed;
+        const apiKey = String(cfg.giphyApiKey || '').trim();
+        const limit = parseInt(cfg.giphyLimit || '30', 10) || 30;
+
+        if (!gifsAllowed || !apiKey) return;
+
+        const btn = document.getElementById('gif_btn');
+        const panel = document.getElementById('gif_panel');
+        const closeBtn = document.getElementById('gif_close');
+        const searchInput = document.getElementById('gif_search');
+        const statusEl = document.getElementById('gif_status');
+        const resultsEl = document.getElementById('gif_results');
+        const form = document.getElementById('chat_message_form');
+        const input = document.getElementById('id_body');
+
+        if (!btn || !panel || !searchInput || !resultsEl || !form || !input) return;
+
+        let open = false;
+        let debounceId = null;
+        let activeReq = 0;
+        let hasLoadedInitial = false;
+
+        function scheduleReposition() {
+            if (!open) return;
+            // Let layout settle (images, fonts) then reposition.
+            window.setTimeout(() => { try { positionPanel(); } catch {} }, 0);
+            window.setTimeout(() => { try { positionPanel(); } catch {} }, 60);
+            window.setTimeout(() => { try { positionPanel(); } catch {} }, 220);
+        }
+
+        function positionPanel() {
+            if (!panel || !btn) return;
+            if (panel.classList.contains('hidden')) return;
+
+            // Desktop: CSS (`sm:absolute ... sm:bottom-full ...`) handles stable positioning.
+            // JS positioning on desktop caused the perceived "hover drift" when transforms/images load.
+            try {
+                if (window.matchMedia && window.matchMedia('(min-width: 640px)').matches) {
+                    panel.style.left = '';
+                    panel.style.right = '';
+                    panel.style.top = '';
+                    panel.style.bottom = '';
+                    panel.style.display = '';
+                    panel.style.visibility = '';
+                    return;
+                }
+            } catch {}
+
+            // Ensure we have measurable dimensions.
+            const prevVis = panel.style.visibility;
+            panel.style.visibility = 'hidden';
+            panel.style.display = 'block';
+
+            const panelRect = panel.getBoundingClientRect();
+            const panelW = panelRect.width || 384;
+            const panelH = panelRect.height || 320;
+            const btnRect = btn.getBoundingClientRect();
+
+            const padding = 12;
+            const gap = 10;
+
+            // Right-align to button, clamp to viewport.
+            let left = btnRect.right - panelW;
+            left = Math.max(padding, Math.min(left, window.innerWidth - panelW - padding));
+
+            // Prefer above button; if not enough room, place below.
+            const canPlaceAbove = (btnRect.top - panelH - gap) >= padding;
+
+            panel.style.left = `${Math.round(left)}px`;
+            panel.style.right = 'auto';
+
+            if (canPlaceAbove) {
+                // Anchor using TOP above the button so late-loading images don't push it down.
+                let top = btnRect.top - gap - panelH;
+                top = Math.max(padding, Math.min(top, window.innerHeight - panelH - padding));
+                panel.style.top = `${Math.round(top)}px`;
+                panel.style.bottom = 'auto';
+            } else {
+                let top = btnRect.bottom + gap;
+                top = Math.max(padding, Math.min(top, window.innerHeight - panelH - padding));
+                panel.style.top = `${Math.round(top)}px`;
+                panel.style.bottom = 'auto';
+            }
+
+            panel.style.visibility = prevVis || '';
+        }
+
+        function setPanelOpen(next) {
+            open = !!next;
+            if (open) {
+                panel.classList.remove('hidden');
+                // Place it immediately (without flicker).
+                try { panel.style.visibility = 'hidden'; } catch {}
+                positionPanel();
+                requestAnimationFrame(() => {
+                    try {
+                        panel.classList.remove('opacity-0', 'scale-95', 'pointer-events-none');
+                        panel.classList.add('opacity-100', 'scale-100', 'pointer-events-auto');
+                    } catch {}
+                    try { panel.style.visibility = ''; } catch {}
+                });
+                try { searchInput.focus(); } catch {}
+            } else {
+                try {
+                    panel.classList.add('opacity-0', 'scale-95', 'pointer-events-none');
+                    panel.classList.remove('opacity-100', 'scale-100', 'pointer-events-auto');
+                } catch {}
+                window.setTimeout(() => {
+                    if (!open) {
+                        try { panel.classList.add('hidden'); } catch {}
+                    }
+                }, 160);
+            }
+        }
+
+        function renderStatus(text) {
+            if (!statusEl) return;
+            statusEl.textContent = String(text || '');
+        }
+
+        function renderResults(items) {
+            resultsEl.innerHTML = '';
+            if (!items || !items.length) {
+                resultsEl.innerHTML = '<div class="col-span-2 text-xs text-gray-400">No GIFs found.</div>';
+                return;
+            }
+            const frag = document.createDocumentFragment();
+            for (const it of items) {
+                const images = it && it.images ? it.images : null;
+                const url = images && images.fixed_width && images.fixed_width.url ? String(images.fixed_width.url) : '';
+                const thumb = images && images.fixed_width_small && images.fixed_width_small.url ? String(images.fixed_width_small.url) : url;
+                if (!url) continue;
+                const b = document.createElement('button');
+                b.type = 'button';
+                b.className = 'relative overflow-hidden rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 transition';
+                b.setAttribute('data-gif-url', url);
+                b.innerHTML = `<img src="${__escapeHtml(thumb)}" alt="GIF" class="w-full h-28 object-cover" loading="lazy" decoding="async" />`;
+                frag.appendChild(b);
+            }
+            resultsEl.appendChild(frag);
+
+            // Reposition after thumbnails load to prevent perceived drift.
+            try {
+                resultsEl.querySelectorAll('img').forEach((img) => {
+                    img.addEventListener('load', scheduleReposition, { once: true });
+                    img.addEventListener('error', scheduleReposition, { once: true });
+                });
+            } catch {}
+
+            scheduleReposition();
+        }
+
+        async function search(q) {
+            const query = String(q || '').trim();
+            if (!query) {
+                renderStatus('Trending GIFs');
+                if (!hasLoadedInitial) {
+                    await loadTrending();
+                }
+                return;
+            }
+
+            const reqId = ++activeReq;
+            renderStatus('Searching...');
+            try {
+                const url = `https://api.giphy.com/v1/gifs/search?q=${encodeURIComponent(query)}&api_key=${encodeURIComponent(apiKey)}&limit=${encodeURIComponent(String(limit))}`;
+                const resp = await fetch(url, { method: 'GET' });
+                const data = await resp.json().catch(() => null);
+                if (reqId !== activeReq) return;
+                const items = data && Array.isArray(data.data) ? data.data : [];
+                renderStatus(items.length ? `Results: ${items.length}` : 'No results');
+                renderResults(items);
+            } catch {
+                if (reqId !== activeReq) return;
+                renderStatus('Failed to load GIFs.');
+                resultsEl.innerHTML = '<div class="col-span-2 text-xs text-red-300">Could not reach Giphy.</div>';
+            }
+        }
+
+        async function loadTrending() {
+            const reqId = ++activeReq;
+            renderStatus('Loading trending...');
+            try {
+                const url = `https://api.giphy.com/v1/gifs/trending?api_key=${encodeURIComponent(apiKey)}&limit=${encodeURIComponent(String(limit))}`;
+                const resp = await fetch(url, { method: 'GET' });
+                const data = await resp.json().catch(() => null);
+                if (reqId !== activeReq) return;
+                const items = data && Array.isArray(data.data) ? data.data : [];
+                hasLoadedInitial = true;
+                renderStatus(items.length ? 'Trending GIFs' : 'No trending GIFs');
+                renderResults(items);
+            } catch {
+                if (reqId !== activeReq) return;
+                renderStatus('Failed to load GIFs.');
+                resultsEl.innerHTML = '<div class="col-span-2 text-xs text-red-300">Could not reach Giphy.</div>';
+            }
+        }
+
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            const next = !open;
+            setPanelOpen(next);
+            if (next) {
+                // Show something immediately.
+                const q = String(searchInput.value || '').trim();
+                if (!q) loadTrending();
+                scheduleReposition();
+            }
+        });
+        if (closeBtn) closeBtn.addEventListener('click', (e) => { e.preventDefault(); setPanelOpen(false); });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key !== 'Escape') return;
+            if (!open) return;
+            setPanelOpen(false);
+        }, true);
+
+        // Close on outside click.
+        document.addEventListener('click', (e) => {
+            if (!open) return;
+            const inside = e.target && e.target.closest ? e.target.closest('#gif_panel, #gif_btn') : null;
+            if (!inside) setPanelOpen(false);
+        }, true);
+
+        // Keep anchored when the page/layout changes.
+        window.addEventListener('resize', () => { if (open) positionPanel(); }, { passive: true });
+        window.addEventListener('scroll', () => { if (open) positionPanel(); }, true);
+
+        // Reposition on pointer hover (user mentioned hover causes drift).
+        try {
+            panel.addEventListener('pointerenter', scheduleReposition, { passive: true });
+            panel.addEventListener('pointermove', () => { if (open) positionPanel(); }, { passive: true });
+        } catch {}
+
+        searchInput.addEventListener('input', () => {
+            if (debounceId) window.clearTimeout(debounceId);
+            debounceId = window.setTimeout(() => search(searchInput.value), 250);
+        });
+
+        resultsEl.addEventListener('click', (e) => {
+            const btn = e.target && e.target.closest ? e.target.closest('[data-gif-url]') : null;
+            if (!btn) return;
+            const url = String(btn.getAttribute('data-gif-url') || '').trim();
+            if (!url) return;
+
+            const gifBody = `[GIF] ${url}`;
+            setPanelOpen(false);
+
+            // Private chats: send instantly without showing the GIF body in the input.
+            // We temporarily set the value for the submit handler, then restore immediately.
+            const prevValue = input.value;
+            if (typeof __linksAllowed !== 'undefined' && __linksAllowed) {
+                try {
+                    input.value = gifBody;
+                    if (form.requestSubmit) form.requestSubmit();
+                    else {
+                        const send = document.getElementById('chat_send_btn');
+                        if (send) send.click();
+                    }
+                } catch {
+                    // ignore
+                } finally {
+                    try { input.value = prevValue; } catch {}
+                }
+                return;
+            }
+
+            // Non-private: keep the old UX.
+            input.value = gifBody;
+            try {
+                if (form.requestSubmit) form.requestSubmit();
+                else {
+                    const send = document.getElementById('chat_send_btn');
+                    if (send) send.click();
+                }
+            } catch {}
+        });
+
+        // Initial state
+        renderStatus('Trending GIFs');
+        resultsEl.innerHTML = '<div class="col-span-2 text-xs text-gray-400">Opening…</div>';
+    })();
+
+    (function initGifHoverPlayback() {
+        // Only affects GIF messages rendered as <video data-gif-player>.
+        // Behavior:
+        // - Not autoplay
+        // - Hover -> play up to 6 times then stop
+        // - Scroll -> stop immediately
+
+        const container = document.getElementById('chat_container') || document;
+        const isTouchMode = (() => {
+            try {
+                if (window.matchMedia && window.matchMedia('(hover: none) and (pointer: coarse)').matches) return true;
+            } catch {}
+            try {
+                if (navigator && typeof navigator.maxTouchPoints === 'number' && navigator.maxTouchPoints > 0) return true;
+            } catch {}
+            return false;
+        })();
+
+        const maxLoopsDefault = 6;
+        const maxLoopsTouch = 5;
+        const state = new WeakMap();
+        let scrollStopAt = 0;
+
+        function now() { return Date.now(); }
+
+        function isVisible(el) {
+            try {
+                const r = el.getBoundingClientRect();
+                return r.bottom > 0 && r.right > 0 && r.top < (window.innerHeight || 0) && r.left < (window.innerWidth || 0);
+            } catch {
+                return true;
+            }
+        }
+
+        function fallbackToImg(video) {
+            try {
+                const gifUrl = video.getAttribute('data-gif-url') || '';
+                if (!gifUrl) return;
+                const img = document.createElement('img');
+                img.className = video.className || 'w-full h-auto rounded-lg';
+                img.src = gifUrl;
+                img.alt = 'GIF';
+                img.loading = 'lazy';
+                img.decoding = 'async';
+                video.replaceWith(img);
+            } catch {}
+        }
+
+        function ensure(video) {
+            if (!video || state.has(video)) return;
+
+            const st = {
+                active: false,
+                loops: 0,
+                maxLoops: isTouchMode
+                    ? maxLoopsTouch
+                    : (parseInt(video.getAttribute('data-gif-loops') || String(maxLoopsDefault), 10) || maxLoopsDefault),
+                inCycle: false,
+                cooldownUntil: 0,
+            };
+            state.set(video, st);
+
+            try {
+                video.autoplay = false;
+                video.loop = false;
+                video.muted = true;
+                video.playsInline = true;
+            } catch {}
+
+            function stop(resetToStart) {
+                try { video.pause(); } catch {}
+                st.inCycle = false;
+                if (resetToStart) {
+                    try { video.currentTime = 0; } catch {}
+                }
+            }
+
+            async function playOnce() {
+                try {
+                    if (!isVisible(video)) return;
+                    await video.play();
+                } catch {
+                    // ignore (autoplay policy etc)
+                }
+            }
+
+            function startCycle() {
+                const t = now();
+                if (t < st.cooldownUntil) return;
+                if (!st.active) return;
+                if (!isVisible(video)) return;
+
+                st.loops = 0;
+                st.inCycle = true;
+                try { video.currentTime = 0; } catch {}
+                playOnce();
+            }
+
+            video.addEventListener('ended', () => {
+                if (!state.has(video)) return;
+                // Stop if user scrolled recently.
+                if (now() - scrollStopAt < 350) {
+                    stop(true);
+                    st.active = false;
+                    return;
+                }
+                if (!st.active) {
+                    stop(true);
+                    return;
+                }
+
+                st.loops += 1;
+                if (st.loops >= st.maxLoops) {
+                    stop(true);
+                    st.active = false;
+                    return;
+                }
+
+                // Replay
+                try { video.currentTime = 0; } catch {}
+                playOnce();
+            });
+
+            video.addEventListener('error', () => fallbackToImg(video), { once: true });
+
+            if (!isTouchMode) {
+                video.addEventListener('pointerenter', () => {
+                    st.active = true;
+                    startCycle();
+                });
+                video.addEventListener('pointerleave', () => {
+                    st.active = false;
+                    stop(true);
+                });
+                video.addEventListener('pointermove', () => {
+                    // If scroll stopped playback while cursor stayed on top, moving cursor should restart.
+                    if (!st.active) return;
+                    if (st.inCycle) return;
+                    startCycle();
+                }, { passive: true });
+            } else {
+                // Mobile: tap to play (5 loops) then stop. Tap again restarts.
+                video.addEventListener('click', (e) => {
+                    try { e.preventDefault(); e.stopPropagation(); } catch {}
+                    if (st.inCycle) {
+                        st.active = false;
+                        stop(true);
+                        return;
+                    }
+                    st.active = true;
+                    startCycle();
+                }, true);
+            }
+
+            // If it leaves viewport, stop.
+            try {
+                const obs = new IntersectionObserver((entries) => {
+                    for (const en of entries) {
+                        if (en.target !== video) continue;
+                        if (!en.isIntersecting) stop(true);
+                    }
+                }, { threshold: 0.1 });
+                obs.observe(video);
+            } catch {}
+        }
+
+        function scan(root) {
+            const r = root || document;
+            try {
+                r.querySelectorAll('video[data-gif-player]').forEach((v) => ensure(v));
+            } catch {}
+        }
+
+        function stopAllFromScroll() {
+            scrollStopAt = now();
+            try {
+                document.querySelectorAll('video[data-gif-player]').forEach((v) => {
+                    const st = state.get(v);
+                    if (st) st.cooldownUntil = now() + 250;
+                    if (st) st.active = false;
+                    try { v.pause(); } catch {}
+                    try { v.currentTime = 0; } catch {}
+                    if (st) st.inCycle = false;
+                });
+            } catch {}
+        }
+
+        scan(document);
+
+        // Stop on scroll (user asked).
+        try {
+            container.addEventListener('scroll', stopAllFromScroll, { passive: true });
+        } catch {}
+        try {
+            window.addEventListener('scroll', stopAllFromScroll, { passive: true });
+        } catch {}
+
+        // New messages inserted: scan them.
+        const messages = document.getElementById('chat_messages');
+        if (messages && typeof MutationObserver !== 'undefined') {
+            const mo = new MutationObserver((mutations) => {
+                for (const m of mutations) {
+                    for (const node of m.addedNodes || []) {
+                        if (!(node instanceof HTMLElement)) continue;
+                        scan(node);
+                    }
+                }
+            });
+            try { mo.observe(messages, { childList: true, subtree: true }); } catch {}
+        }
     })();
 
     (function initMobileSidebarToggle() {

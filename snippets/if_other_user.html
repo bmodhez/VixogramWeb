@@ -1,6 +1,12 @@
 {% if other_user %}
 <div id="online-icon" class="gray-dot absolute top-2 left-2"></div>
-<a href="{% url 'profile-user' other_user.username %}">
+<a
+    href="{% url 'profile-user' other_user.username %}"
+    hx-get="{% url 'profile-user' other_user.username %}?modal=1"
+    hx-target="#global_modal_root"
+    hx-swap="innerHTML"
+    hx-push-url="false"
+>
     <div class="flex items-center gap-2 p-4 sticky top-0 z-10">
         <img class="w-10 h-10 rounded-full object-cover" src="{{ other_user.profile.avatar }}" />
         <div>

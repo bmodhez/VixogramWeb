@@ -1,16 +1,79 @@
 {% load chat_extras %}
 
-{% if message.body %}
+{% if message.body and message.body|slice:":5" == "[GIF]" %}
+    {% with gif_url=message.body|slice:"5:"|cut:" " %}
+        <div class="w-full sm:w-auto max-w-full sm:max-w-72">
+            <video
+                class="w-full h-auto rounded-lg bg-black/20"
+                muted
+                playsinline
+                preload="metadata"
+                poster="{{ gif_url|giphy_still_url }}"
+                data-gif-player
+                data-gif-url="{{ gif_url }}"
+                data-gif-loops="6"
+            >
+                <source src="{{ gif_url|giphy_mp4_url }}" type="video/mp4" />
+            </video>
+        </div>
+    {% endwith %}
+{% elif message.body %}
     <span class="chat-message-body break-words whitespace-pre-wrap">{{ message.body|escape|highlight_mentions|urlize|linebreaksbr }}</span>
 {% elif message.file %}
     {% if message.is_image %}
-        <img
-            class="w-full sm:w-auto max-w-full sm:max-w-72 h-auto rounded-lg cursor-zoom-in"
-            src="{{ message.file.url }}"
-            alt="{{ message.filename|default:'Image' }}"
-            loading="lazy"
-            data-image-viewer
-        />
+        {% if message.one_time_view_seconds and message.group.is_private and message.author != user %}
+            <div
+                class="w-full sm:w-auto max-w-full sm:max-w-72"
+                data-one-time-container
+                data-one-time-message-id="{{ message.id }}"
+            >
+                {% if message.one_time_viewed_by_me %}
+                    <div class="rounded-lg border border-gray-700 bg-gray-900/40 px-3 py-3 text-sm text-gray-200" data-one-time-expired>
+                        Photo expired
+                    </div>
+                {% else %}
+                    <button
+                        type="button"
+                        class="relative w-full text-left overflow-hidden rounded-2xl border border-white/10 bg-white/5 hover:bg-white/10 transition"
+                        data-one-time-open-btn
+                        data-one-time-open-url="{% url 'message-one-time-open' message.id %}"
+                        data-one-time-file-url="{{ message.file.url }}"
+                        data-one-time-seconds="{{ message.one_time_view_seconds }}"
+                    >
+                        <div class="absolute inset-0 opacity-60" style="background-image: radial-gradient(circle at 1px 1px, rgba(255,255,255,0.12) 1px, transparent 0); background-size: 10px 10px;"></div>
+                        <div class="relative flex items-center justify-between gap-4 px-4 py-4">
+                            <div class="flex items-center gap-3 min-w-0">
+                                <div class="h-10 w-10 rounded-full bg-black/20 border border-white/10 flex items-center justify-center text-white/90">▶</div>
+                                <div class="min-w-0">
+                                    <div class="text-sm font-semibold text-gray-100">Photo</div>
+                                    <div class="mt-0.5 text-[11px] text-gray-400">Tap to view • {{ message.one_time_view_seconds }}s</div>
+                                </div>
+                            </div>
+                            <div class="text-xs font-semibold text-gray-200">1×</div>
+                        </div>
+                    </button>
+                {% endif %}
+            </div>
+        {% else %}
+            <div class="w-full sm:w-auto max-w-full sm:max-w-72">
+                {% if message.one_time_view_seconds and message.group.is_private and message.author == user %}
+                    <div class="mb-1.5 text-[11px] text-gray-400">1× • {{ message.one_time_view_seconds }}s</div>
+                {% endif %}
+                <img
+                    class="w-full h-auto rounded-lg cursor-zoom-in"
+                    src="{{ message.file.url }}"
+                    alt="{{ message.filename|default:'Image' }}"
+                    loading="lazy"
+                    data-image-viewer
+                />
+                {% if message.one_time_view_seconds and message.group.is_private and message.author == user %}
+                    <div
+                        data-one-time-sender-status
+                        class="mt-1.5 hidden rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-[11px] text-emerald-200/90"
+                    ></div>
+                {% endif %}
+            </div>
+        {% endif %}
     {% elif message.is_video %}
         <div class="max-w-full sm:max-w-72">
             <video

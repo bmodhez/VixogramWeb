@@ -32,6 +32,8 @@ urlpatterns = [
     path('chat/message/<int:message_id>/edit/', message_edit_view, name='message-edit'),
     path('chat/message/<int:message_id>/delete/', message_delete_view, name='message-delete'),
     path('chat/message/<int:message_id>/react/', message_react_toggle, name='message-react'),
+    path('chat/message/<int:message_id>/one-time/open/', message_one_time_open, name='message-one-time-open'),
+    path('chat/message/<int:message_id>/info/', message_info_view, name='message-info'),
 
     # Staff tools
     path('chat/admin/users/', admin_users_view, name='admin-users'),

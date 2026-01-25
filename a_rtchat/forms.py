@@ -10,7 +10,7 @@ class ChatmessageCreateForm(ModelForm):
         widgets = {
             'body': forms.Textarea(attrs={
                 'placeholder': 'Add message ...',
-                'class': 'w-full bg-white/5 text-white border border-white/10 rounded-full px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500/30 placeholder:text-gray-400 resize-none',
+                'class': 'w-full bg-white/5 text-white border border-white/10 rounded-full px-4 pr-12 py-3 outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500/30 placeholder:text-gray-400 resize-none',
                 'maxlength': '300',
                 'rows': '1',
                 'autofocus': True,

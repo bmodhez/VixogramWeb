@@ -8,6 +8,7 @@ import base64
 class Profile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE)
     image = models.ImageField(upload_to='avatars/', null=True, blank=True)
+    cover_image = models.ImageField(upload_to='profile_covers/', null=True, blank=True)
     displayname = models.CharField(max_length=20, null=True, blank=True)
     info = models.TextField(null=True, blank=True) 
     chat_blocked = models.BooleanField(default=False)
@@ -46,6 +47,15 @@ class Profile(models.Model):
                 # If storage isn't configured or the file is missing, fall back to default.
                 pass
         return DEFAULT_AVATAR_DATA_URI
+
+    @property
+    def cover_url(self) -> str | None:
+        if not self.cover_image:
+            return None
+        try:
+            return self.cover_image.url
+        except Exception:
+            return None
 
 
 _DEFAULT_AVATAR_SVG = """<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 128 128' role='img' aria-label='User avatar'>

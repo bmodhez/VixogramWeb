@@ -1,20 +1,40 @@
 {% extends 'base.html' %}
 {% load static %}
+{% load user_filters %}
+
+{% block body_class %} vixo-profile-page{% endblock %}
 
 {% block content %}
 <wrapper class="block max-w-md mx-auto my-10 px-6">
-    <div class="bg-gray-800 p-8 rounded-2xl shadow-2xl border border-gray-700">
-        <div class="flex justify-end mb-3">
-            <a href="{% url 'home' %}" class="bg-gray-700 hover:bg-gray-600 text-white rounded-lg px-4 py-2 transition-colors text-sm">
-                Back
-            </a>
+    <div class="relative rounded-2xl shadow-2xl border border-white/10 overflow-hidden">
+        <!-- Full-card background -->
+        <div class="absolute inset-0">
+            {% if profile.cover_url %}
+                <img src="{{ profile.cover_url }}" alt="Profile background" class="absolute inset-0 w-full h-full object-cover" />
+            {% else %}
+                <div class="absolute inset-0 bg-gradient-to-br from-purple-600/55 via-indigo-600/35 to-sky-600/55"></div>
+            {% endif %}
+            <div class="absolute inset-0 bg-gradient-to-b from-black/20 via-black/45 to-black/75"></div>
+            <div class="absolute inset-0 backdrop-blur-[2px]"></div>
         </div>
 
-        <div class="text-center">
-            <img class="w-32 h-32 rounded-full mx-auto object-cover border-4 border-emerald-500"
-                 src="{{ profile.avatar }}" alt="{{ profile.user.username }}">
+        <!-- Foreground -->
+        <div class="relative bg-gray-900/40">
+            <div class="flex justify-end p-3">
+                <a href="{% url 'home' %}" class="bg-gray-900/60 hover:bg-gray-900/80 text-white rounded-lg px-4 py-2 transition-colors text-sm border border-white/10">
+                    Back
+                </a>
+            </div>
 
-            <h1 class="text-2xl font-bold mt-4 text-white inline-flex items-center justify-center gap-2">
+            <div class="px-8 pb-8 pt-2">
+                <div class="flex justify-center">
+                    <img class="relative z-10 w-28 h-28 rounded-full object-cover ring-4 ring-black/40 border border-white/20"
+                         src="{{ profile.avatar }}" alt="{{ profile.user.username }}">
+                </div>
+
+                <div class="text-center mt-4">
+
+            <h1 class="text-2xl font-extrabold text-white inline-flex items-center justify-center gap-2">
                 <span>{{ profile.name }}</span>
                 {% if is_verified_badge %}
                     <span
@@ -41,7 +61,7 @@
 
             <div class="mt-4 px-4 text-gray-200 text-sm leading-relaxed">
                 {% if profile.info %}
-                    {{ profile.info }}
+                    {{ profile.info|sanitize_bio }}
                 {% else %}
                     <span class="text-gray-300">No bio added yet.</span>
                 {% endif %}
@@ -105,12 +125,17 @@
                           {% if is_following %}data-confirm="Are you sure you want to unfollow @{{ profile_user.username }}?" data-confirm-title="Unfollow"{% endif %}>
                         {% csrf_token %}
                         <button type="submit"
-                            class="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-2 px-6 rounded-lg transition-colors">
+                            class="w-full bg-gradient-to-r from-purple-500 via-indigo-500 to-sky-500 hover:from-purple-400 hover:via-indigo-400 hover:to-sky-400 text-white font-bold py-2 px-6 rounded-lg transition-colors">
                             {% if is_following %}Unfollow{% else %}Follow{% endif %}
                         </button>
                     </form>
-                    <a href="{% url 'report-user' profile_user.username %}"
-                       class="block w-full text-center bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-6 rounded-lg transition-colors">
+                          <a
+                              href="{% url 'report-user' profile_user.username %}"
+                              hx-get="{% url 'report-user' profile_user.username %}?modal=1"
+                              hx-target="#global_modal_root"
+                              hx-swap="innerHTML"
+                              hx-push-url="false"
+                              class="block w-full text-center bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-6 rounded-lg transition-colors">
                         Report
                     </a>
                 </div>
@@ -119,7 +144,7 @@
             {% if user.is_authenticated and user == profile.user %}
                 <div class="mt-8 flex w-full gap-3">
                     <a href="{% url 'profile-edit' %}"
-                       class="flex-1 inline-flex items-center justify-center text-center whitespace-nowrap bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-2 px-4 rounded-lg transition-colors">
+                       class="flex-1 inline-flex items-center justify-center text-center whitespace-nowrap bg-gradient-to-r from-purple-500 via-indigo-500 to-sky-500 hover:from-purple-400 hover:via-indigo-400 hover:to-sky-400 text-white font-bold py-2 px-4 rounded-lg transition-colors">
                         Edit profile
                     </a>
                     <a href="{% url 'profile-settings' %}"
@@ -128,6 +153,8 @@
                     </a>
                 </div>
             {% endif %}
+                </div>
+            </div>
         </div>
     </div>
 

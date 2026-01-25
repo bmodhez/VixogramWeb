@@ -313,6 +313,7 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'a_core.middleware.MaintenanceModeMiddleware',
     'a_users.middleware.ActiveUserRequiredMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'a_core.middleware.RateLimitMiddleware',
@@ -347,6 +348,7 @@ TEMPLATES = [
                 'a_core.context_processors.firebase_config',
                 'a_core.context_processors.site_contact',
                 'a_core.context_processors.recaptcha_config',
+                'a_core.context_processors.welcome_popup',
                 'a_users.context_processors.notifications_badge',
                 'a_rtchat.context_processors.admin_reports_badge',
                 'a_rtchat.context_processors.mobile_ads_config',
@@ -517,6 +519,10 @@ AUTH_RATE_LIMIT_PERIOD = int(os.environ.get('AUTH_RATE_LIMIT_PERIOD', '300'))
 CHAT_MSG_RATE_LIMIT = int(os.environ.get('CHAT_MSG_RATE_LIMIT', '8'))
 CHAT_MSG_RATE_PERIOD = int(os.environ.get('CHAT_MSG_RATE_PERIOD', '10'))
 
+# Chat message retention (per room)
+# Keep only the newest N messages per room; older messages are deleted.
+CHAT_MAX_MESSAGES_PER_ROOM = int(os.environ.get('CHAT_MAX_MESSAGES_PER_ROOM', '900'))
+
 # Chat burst protection (fast spam): if a user sends too many messages in a very short window,
 # apply a short cooldown (uses the same cache backend as other rate limits).
 CHAT_BURST_MSG_LIMIT = int(os.environ.get('CHAT_BURST_MSG_LIMIT', '5'))
@@ -524,7 +530,7 @@ CHAT_BURST_MSG_PERIOD = int(os.environ.get('CHAT_BURST_MSG_PERIOD', '3'))
 CHAT_BURST_COOLDOWN_SECONDS = int(os.environ.get('CHAT_BURST_COOLDOWN_SECONDS', '10'))
 
 # Room-wide flood protection
-ROOM_MSG_RATE_LIMIT = int(os.environ.get('ROOM_MSG_RATE_LIMIT', '30'))
+ROOM_MSG_RATE_LIMIT = int(os.environ.get('ROOM_MSG_RATE_LIMIT', '1000'))
 ROOM_MSG_RATE_PERIOD = int(os.environ.get('ROOM_MSG_RATE_PERIOD', '10'))
 
 # Duplicate message detection

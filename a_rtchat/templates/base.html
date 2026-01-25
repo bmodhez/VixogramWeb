@@ -292,6 +292,131 @@
     </div>
     {% endwith %}
 
+    <!-- Global modal root (used for HTMX overlays like profile preview) -->
+    <div id="global_modal_root" class="fixed inset-0 z-[60] hidden"></div>
+
+    <style>
+        @keyframes vixoFadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        @keyframes vixoPopIn {
+            from { opacity: 0; transform: translateY(8px) scale(0.96); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        .vixo-modal-overlay { animation: vixoFadeIn 140ms ease-out both; }
+        .vixo-modal-card { animation: vixoPopIn 170ms ease-out both; }
+    </style>
+
+    <script>
+        (function () {
+            const root = document.getElementById('global_modal_root');
+            if (!root) return;
+
+            const close = () => {
+                root.innerHTML = '';
+                try { root.classList.add('hidden'); } catch {}
+                try { document.body.classList.remove('overflow-hidden'); } catch {}
+            };
+
+            window.vixoCloseGlobalModal = close;
+
+            // Allow server responses to request a modal close.
+            document.body.addEventListener('vixo:closeGlobalModal', () => {
+                close();
+            });
+
+            // Lightweight toast API for HTMX flows (e.g., modal form submits).
+            const ensureToastContainer = () => {
+                let container = document.getElementById('toast-container');
+                if (container) return container;
+                container = document.createElement('div');
+                container.id = 'toast-container';
+                container.className = 'fixed top-16 right-3 sm:top-20 sm:right-6 z-50 w-[min(24rem,calc(100vw-3rem))] space-y-3 pointer-events-none';
+                document.body.appendChild(container);
+                return container;
+            };
+
+            const showToast = (message, kind = 'info', durationMs = 4000) => {
+                try {
+                    const msg = String(message || '').trim();
+                    if (!msg) return;
+
+                    const container = ensureToastContainer();
+
+                    const toast = document.createElement('div');
+                    toast.className = 'toast pointer-events-auto flex items-start gap-3 rounded-xl border border-gray-800 bg-gray-900/90 px-4 py-3 text-sm text-gray-100 shadow-lg shadow-black/20 transition duration-200 ease-out transform-gpu';
+                    toast.setAttribute('data-duration', String(durationMs));
+
+                    const dot = document.createElement('div');
+                    dot.className = 'mt-0.5 h-2.5 w-2.5 flex-none rounded-full ' + (kind === 'error' ? 'bg-red-500' : (kind === 'success' ? 'bg-emerald-400' : 'bg-gray-500'));
+
+                    const body = document.createElement('div');
+                    body.className = 'flex-1 leading-5';
+                    body.textContent = msg;
+
+                    const closeBtn = document.createElement('button');
+                    closeBtn.type = 'button';
+                    closeBtn.className = '-mr-1 -mt-1 inline-flex h-8 w-8 items-center justify-center rounded-lg text-gray-300 hover:text-white hover:bg-gray-800/60 transition';
+                    closeBtn.setAttribute('aria-label', 'Dismiss');
+                    closeBtn.innerHTML = '<span aria-hidden="true">×</span>';
+
+                    const removeToast = () => {
+                        toast.classList.add('opacity-0', '-translate-y-1');
+                        window.setTimeout(() => {
+                            try { toast.remove(); } catch {}
+                        }, 200);
+                    };
+
+                    closeBtn.addEventListener('click', removeToast);
+                    window.setTimeout(removeToast, durationMs);
+
+                    toast.appendChild(dot);
+                    toast.appendChild(body);
+                    toast.appendChild(closeBtn);
+                    container.appendChild(toast);
+                } catch {}
+            };
+
+            document.body.addEventListener('vixo:toast', (e) => {
+                const detail = (e && e.detail) || {};
+                showToast(detail.message || '', detail.kind || 'info', detail.durationMs || 4000);
+            });
+
+            document.addEventListener('click', (e) => {
+                const t = e && e.target;
+                if (!t) return;
+                const closeBtn = t.closest ? t.closest('[data-modal-close]') : null;
+                if (closeBtn) {
+                    e.preventDefault();
+                    close();
+                    return;
+                }
+                if (t && (t.matches && t.matches('[data-modal-backdrop]'))) {
+                    close();
+                }
+            }, true);
+
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape' && root.innerHTML.trim()) close();
+            });
+
+            document.body.addEventListener('htmx:afterSwap', (e) => {
+                try {
+                    if (!e || !e.detail || !e.detail.target) return;
+                    if (e.detail.target.id !== 'global_modal_root') return;
+                    if (root.innerHTML.trim()) {
+                        root.classList.remove('hidden');
+                        document.body.classList.add('overflow-hidden');
+                    } else {
+                        root.classList.add('hidden');
+                        document.body.classList.remove('overflow-hidden');
+                    }
+                } catch {}
+            });
+        })();
+    </script>
+
     <div id="confirm-modal" class="fixed inset-0 z-50 hidden" aria-hidden="true" role="dialog" aria-modal="true">
         <div id="confirm-backdrop" class="absolute inset-0 bg-black/60 opacity-0 transition duration-200 ease-out"></div>
         <div class="relative min-h-full flex items-center justify-center p-6">
@@ -400,14 +525,84 @@
         </div>
     </div>
 
+    {% if SHOW_WELCOME_POPUP %}
+    <div id="welcome-modal" class="fixed inset-0 z-[70]" aria-hidden="false" role="dialog" aria-modal="true">
+        <div class="absolute inset-0 bg-black/60 vixo-modal-overlay" data-welcome-backdrop></div>
+        <div class="relative min-h-full flex items-center justify-center p-6 pointer-events-none">
+            <div class="w-full max-w-md pointer-events-auto vixo-modal-card">
+                <div class="relative overflow-hidden rounded-2xl border border-white/10 bg-gray-900/70 backdrop-blur shadow-2xl">
+                    <div class="absolute inset-0 bg-gradient-to-br from-purple-600/25 via-indigo-600/15 to-sky-600/25"></div>
+                    <div class="relative p-6">
+                        <div class="flex items-start justify-between gap-4">
+                            <div>
+                                <div class="text-xl font-extrabold text-white">Welcome to Vixogram</div>
+                                <div class="mt-2 text-sm text-gray-200/90">By using this platform, you agree to:</div>
+                            </div>
+                            <button
+                                type="button"
+                                id="welcome-close"
+                                class="shrink-0 rounded-lg border border-white/10 bg-white/20 px-3 py-2 text-sm text-gray-100 hover:bg-white/25 transition-colors"
+                                aria-label="Close"
+                            >
+                                Close
+                            </button>
+                        </div>
+
+                        <ul class="mt-4 space-y-2 text-sm text-gray-100/90">
+                            <li>• Keep chats respectful</li>
+                            <li>• Avoid spam &amp; harmful content</li>
+                            <li>• Help maintain a positive environment</li>
+                        </ul>
+
+                        <div class="mt-5 text-sm text-gray-100/90">Let’s build a better community together 🤝</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        (function () {
+            const modal = document.getElementById('welcome-modal');
+            if (!modal) return;
+            const closeBtn = document.getElementById('welcome-close');
+
+            const close = () => {
+                try { document.body.classList.remove('overflow-hidden'); } catch {}
+                try { modal.remove(); } catch { try { modal.style.display = 'none'; } catch {} }
+            };
+
+            try { document.body.classList.add('overflow-hidden'); } catch {}
+
+            if (closeBtn) closeBtn.addEventListener('click', (e) => { e.preventDefault(); close(); });
+
+            modal.addEventListener('click', (e) => {
+                const t = e && e.target;
+                if (t && t.hasAttribute && t.hasAttribute('data-welcome-backdrop')) close();
+            });
+
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') close();
+            });
+
+            // Auto close after 10 seconds
+            setTimeout(close, 10000);
+        })();
+    </script>
+    {% endif %}
+
     <!-- Footer removed (Contact lives in navbar) -->
 
     <script id="vixo-config" type="application/json">{
         "userAuthenticated": {% if user.is_authenticated %}true{% else %}false{% endif %},
+        "userIsStaff": {% if user.is_authenticated and user.is_staff %}true{% else %}false{% endif %},
         "navNotifUnread": {{ NAV_NOTIF_UNREAD|default:0 }},
         "firebaseEnabled": {% if user.is_authenticated and FIREBASE_ENABLED %}true{% else %}false{% endif %},
         "pushRegisterUrl": "{% url 'push-register' %}",
         "pushConfigUrl": "{% url 'push-config' %}",
+        "maintenancePageUrl": "{% url 'maintenance' %}",
+        "maintenanceStatusUrl": "{% url 'maintenance-status' %}",
+        "maintenanceToggleUrl": "{% url 'maintenance-toggle' %}",
         "mobileAdsEnabled": {% if MOBILE_ADS_ENABLED %}true{% else %}false{% endif %},
         "mobileAds": {
             "chatList": {

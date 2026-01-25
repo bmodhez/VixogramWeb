@@ -16,9 +16,11 @@ except Exception:  # pragma: no cover
 try:
     from allauth.account.signals import user_signed_up
     from allauth.account.signals import email_confirmed
+    from allauth.account.signals import user_logged_in
 except Exception:  # pragma: no cover
     user_signed_up = None
     email_confirmed = None
+    user_logged_in = None
 
 from .tasks import send_welcome_email
 
@@ -134,4 +136,34 @@ if email_confirmed is not None:
             referral.save(update_fields=['points_awarded', 'awarded_at'])
         except Exception:
             # Keep it idempotent: if save fails, next confirm can retry.
+            pass
+
+
+if user_signed_up is not None:
+    @receiver(user_signed_up)
+    def show_welcome_popup_on_signup(request, user, **kwargs):
+        try:
+            if request is None:
+                return
+            # Show only once; signup often auto-logs-in.
+            if request.session.get('show_welcome_popup'):
+                return
+            request.session['show_welcome_popup'] = True
+            request.session['welcome_popup_source'] = 'signup'
+        except Exception:
+            pass
+
+
+if user_logged_in is not None:
+    @receiver(user_logged_in)
+    def show_welcome_popup_on_login(request, user, **kwargs):
+        try:
+            if request is None:
+                return
+            # Don't double-show if signup already scheduled it.
+            if request.session.get('show_welcome_popup'):
+                return
+            request.session['show_welcome_popup'] = True
+            request.session['welcome_popup_source'] = 'login'
+        except Exception:
             pass

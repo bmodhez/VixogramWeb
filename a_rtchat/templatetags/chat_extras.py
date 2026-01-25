@@ -35,3 +35,51 @@ def highlight_mentions(value):
         )
 
     return mark_safe(_MENTION_RE.sub(_repl, text))
+
+
+def _split_query(url: str) -> tuple[str, str]:
+    if not url:
+        return '', ''
+    s = str(url)
+    if '?' not in s:
+        return s, ''
+    base, q = s.split('?', 1)
+    return base, ('?' + q) if q else ''
+
+
+@register.filter(name='giphy_mp4_url')
+def giphy_mp4_url(url):
+    """Best-effort conversion from a Giphy GIF URL to a MP4 URL.
+
+    We store GIF URLs in messages. MP4 allows pausing/playing on hover.
+    Giphy generally supports the same path with .mp4.
+    """
+    if not url:
+        return ''
+    base, q = _split_query(str(url).strip())
+    if base.lower().endswith('.gif'):
+        return base[:-4] + '.mp4' + q
+    return base + q
+
+
+@register.filter(name='giphy_still_url')
+def giphy_still_url(url):
+    """Best-effort conversion from a Giphy GIF URL to a *still* preview.
+
+    Used as a poster/thumbnail so GIFs don't animate until hovered.
+    """
+    if not url:
+        return ''
+    base, q = _split_query(str(url).strip())
+
+    lower = base.lower()
+    if lower.endswith('/giphy.gif'):
+        return base[:-9] + 'giphy_s.gif' + q
+
+    m = re.search(r"/(\d+w)\.gif$", base, flags=re.IGNORECASE)
+    if m:
+        size = m.group(1)
+        return re.sub(r"/(\d+w)\.gif$", f"/{size}_s.gif", base, flags=re.IGNORECASE) + q
+
+    # Fallback: return original.
+    return base + q

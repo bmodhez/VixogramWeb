@@ -12,7 +12,7 @@ For UX: click '+' opens the emoji bar.
         data-reply-button
         data-reply-to-id="{{ message.id }}"
         data-reply-author="{{ message.author.profile.name|default:message.author.username|escape }}"
-        data-reply-preview="{{ message.body|default:message.file_caption|default:message.filename|default:''|escape }}">
+        data-reply-preview="{% if message.body and message.body|slice:':5' == '[GIF]' %}GIF{% else %}{{ message.body|default:message.file_caption|default:message.filename|default:''|escape }}{% endif %}">
         <span class="text-base leading-none">↩</span>
     </button>
 
@@ -40,6 +40,18 @@ For UX: click '+' opens the emoji bar.
             </button>
 
             <div class="hidden absolute bottom-full mb-2 right-0 min-w-28 rounded-xl border border-gray-800 bg-gray-900/95 shadow-lg shadow-black/20 overflow-hidden z-50" data-message-menu role="menu">
+                {% if message.author == user and chat_group.is_private %}
+                    <button
+                        type="button"
+                        hx-get="{% url 'message-info' message.id %}?modal=1"
+                        hx-target="#global_modal_root"
+                        hx-swap="innerHTML"
+                        hx-push-url="false"
+                        class="w-full text-left px-3 py-2 text-xs text-gray-200 hover:bg-gray-800/60"
+                    >
+                        Info
+                    </button>
+                {% endif %}
                 {% if message.author == user and message.body and message.body|slice:":6" != "[CALL]" and not message.file %}
                     <button type="button"
                         data-edit-message

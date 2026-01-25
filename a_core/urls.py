@@ -6,11 +6,15 @@ from django.views.static import serve as static_serve
 from django.views.generic.base import RedirectView
 from django.templatetags.static import static as static_url
 from a_core.firebase_views import firebase_messaging_sw
+from a_core.maintenance_views import maintenance_page_view, maintenance_status_view, maintenance_toggle_view
 from a_users.allauth_views import CooldownEmailView
 from a_home.views import pricing_view
 
 urlpatterns = [
     path('favicon.ico', RedirectView.as_view(url=static_url('favicon.png'), permanent=True)),
+    path('maintenance/', maintenance_page_view, name='maintenance'),
+    path('api/site/maintenance/status/', maintenance_status_view, name='maintenance-status'),
+    path('api/site/maintenance/toggle/', maintenance_toggle_view, name='maintenance-toggle'),
     path('admin/', admin.site.urls),
     path('firebase-messaging-sw.js', firebase_messaging_sw, name='firebase-messaging-sw'),
     path('pricing/', pricing_view, name='pricing'),

@@ -12,7 +12,14 @@
 <ul id="groupchat-members" class="flex gap-4">
     {% for member in chat_group.members.all %}
     <li>
-        <a href="{% url 'profile-user' member.username %}" class="flex flex-col text-gray-400 items-center justify-center w-20 gap-2">
+        <a
+            href="{% url 'profile-user' member.username %}"
+            hx-get="{% url 'profile-user' member.username %}?modal=1"
+            hx-target="#global_modal_root"
+            hx-swap="innerHTML"
+            hx-push-url="false"
+            class="flex flex-col text-gray-400 items-center justify-center w-20 gap-2"
+        >
             <div class="relative">
                 {% if member in chat_group.users_online.all %}
                 <div class="green-dot border-2 border-gray-800 absolute bottom-0 right-0"></div>

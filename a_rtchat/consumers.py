@@ -137,7 +137,8 @@ from .models_read import ChatReadState
 from .models import Notification
 from .link_policy import contains_link
 from .link_preview import extract_first_http_url, fetch_link_preview
-from .room_policy import room_allows_links
+from .room_policy import room_allows_links, is_free_promotion_room
+from urllib.parse import urlparse
 from .challenges import (
     get_active_challenge,
     start_challenge,
@@ -176,6 +177,18 @@ def _is_chat_blocked(user) -> bool:
         return False
 
 
+def _is_maintenance_blocked(user) -> bool:
+    """When maintenance is enabled, block all non-staff users."""
+    try:
+        if getattr(user, 'is_staff', False):
+            return False
+        from a_core.maintenance_views import is_maintenance_enabled
+
+        return bool(is_maintenance_enabled())
+    except Exception:
+        return False
+
+
 def _resolve_authenticated_user(scope_user):
     """Convert Channels' lazy user wrapper to a real User model instance."""
     if not getattr(scope_user, 'is_authenticated', False):
@@ -187,6 +200,40 @@ def _resolve_authenticated_user(scope_user):
         return scope_user
 
 class ChatroomConsumer(WebsocketConsumer):
+    def _send_cooldown(self, seconds: int, reason: str = '') -> None:
+        try:
+            secs = int(seconds or 0)
+        except Exception:
+            secs = 0
+        if secs <= 0:
+            return
+        try:
+            self.send(text_data=json.dumps({
+                'type': 'cooldown',
+                'seconds': secs,
+                'reason': (reason or '').strip(),
+            }))
+        except Exception:
+            return
+
+    def _parse_gif_message(self, body: str):
+        """Return (ok, url) for a GIF message: '[GIF] <https://...>'."""
+        try:
+            s = (body or '').strip()
+            if not s.startswith('[GIF]'):
+                return False, ''
+            url = s[5:].strip()
+            if not url:
+                return False, ''
+            if not (url.startswith('http://') or url.startswith('https://')):
+                return False, ''
+            host = (urlparse(url).netloc or '').lower()
+            if 'giphy.com' not in host and 'giphyusercontent.com' not in host:
+                return False, ''
+            return True, url
+        except Exception:
+            return False, ''
+
     def _send_challenge_event(self, title: str, body: str, state=None):
         try:
             html = render_to_string('a_rtchat/partials/challenge_event.html', {
@@ -369,6 +416,14 @@ class ChatroomConsumer(WebsocketConsumer):
         self.user = _resolve_authenticated_user(self.scope.get('user'))
         self.chatroom_name = self.scope['url_route']['kwargs']['chatroom_name']
 
+        # Maintenance mode: block non-staff users from connecting.
+        if _is_maintenance_blocked(self.user):
+            try:
+                self.close(code=4403)
+            except Exception:
+                self.close()
+            return
+
         # If the room was deleted / invalid URL, don't raise and spam logs.
         try:
             self.chatroom = ChatGroup.objects.get(group_name=self.chatroom_name)
@@ -481,6 +536,14 @@ class ChatroomConsumer(WebsocketConsumer):
         if not getattr(self.user, 'is_authenticated', False):
             return
 
+        # Maintenance mode: immediately stop non-staff users from sending.
+        if _is_maintenance_blocked(self.user):
+            try:
+                self.close(code=4403)
+            except Exception:
+                self.close()
+            return
+
         # Keep the per-room connection TTL alive.
         try:
             self._touch_room_conn()
@@ -493,6 +556,7 @@ class ChatroomConsumer(WebsocketConsumer):
 
         muted = get_muted_seconds(getattr(self.user, 'id', 0))
         if muted > 0:
+            self._send_cooldown(muted, reason='muted')
             return
 
         event_type = (text_data_json.get('type') or '').strip().lower()
@@ -624,7 +688,7 @@ class ChatroomConsumer(WebsocketConsumer):
             period = int(getattr(settings, 'WS_TYPING_RATE_PERIOD', 10))
             rl = check_rate_limit(make_key('ws_typing', self.chatroom_name, self.user.id), limit=limit, period_seconds=period)
             if not rl.allowed:
-                record_abuse_violation(
+                _strikes, muted_remaining = record_abuse_violation(
                     scope='ws_typing',
                     user_id=self.user.id,
                     room=self.chatroom_name,
@@ -632,13 +696,15 @@ class ChatroomConsumer(WebsocketConsumer):
                     threshold=int(getattr(settings, 'CHAT_ABUSE_STRIKE_THRESHOLD', 5)),
                     mute_seconds=int(getattr(settings, 'CHAT_ABUSE_MUTE_SECONDS', 60)),
                 )
+                if muted_remaining:
+                    self._send_cooldown(muted_remaining, reason='muted')
                 return
         else:
             limit = int(getattr(settings, 'WS_MSG_RATE_LIMIT', 8))
             period = int(getattr(settings, 'WS_MSG_RATE_PERIOD', 10))
             rl = check_rate_limit(make_key('ws_event', self.chatroom_name, self.user.id), limit=limit, period_seconds=period)
             if not rl.allowed:
-                record_abuse_violation(
+                _strikes, muted_remaining = record_abuse_violation(
                     scope='ws_event',
                     user_id=self.user.id,
                     room=self.chatroom_name,
@@ -646,6 +712,7 @@ class ChatroomConsumer(WebsocketConsumer):
                     threshold=int(getattr(settings, 'CHAT_ABUSE_STRIKE_THRESHOLD', 5)),
                     mute_seconds=int(getattr(settings, 'CHAT_ABUSE_MUTE_SECONDS', 60)),
                 )
+                self._send_cooldown(muted_remaining or rl.retry_after, reason='rate_limit')
                 return
         if event_type == 'typing':
             is_typing = bool(text_data_json.get('is_typing'))
@@ -753,17 +820,19 @@ class ChatroomConsumer(WebsocketConsumer):
             # Never block chat on challenge system issues.
             pass
 
-        # Links are only allowed in private chats.
+        # Links are only allowed in private chats (GIF is a special exception; not in Free Promotion).
+        is_gif, _gif_url = self._parse_gif_message(body)
         if contains_link(body) and not room_allows_links(self.chatroom):
-            try:
-                self.send(text_data=json.dumps({
-                    'type': 'error',
-                    'code': 'links_not_allowed',
-                    'message': 'Links are only allowed in private chats.',
-                }))
-            except Exception:
-                pass
-            return
+            if not (is_gif and not is_free_promotion_room(self.chatroom)):
+                try:
+                    self.send(text_data=json.dumps({
+                        'type': 'error',
+                        'code': 'links_not_allowed',
+                        'message': 'Links are only allowed in private chats.',
+                    }))
+                except Exception:
+                    pass
+                return
 
         # AI moderation (Gemini) for WS-created messages.
         pending_moderation = None
@@ -838,7 +907,7 @@ class ChatroomConsumer(WebsocketConsumer):
                     weight=weight,
                 )
                 if auto_muted:
-                    pass
+                    self._send_cooldown(auto_muted, reason='muted')
                 return
 
             if action == 'flag':
@@ -859,7 +928,7 @@ class ChatroomConsumer(WebsocketConsumer):
             ttl_seconds=int(getattr(settings, 'EMOJI_SPAM_TTL', 15)),
         )
         if is_emoji_spam:
-            record_abuse_violation(
+            _strikes, auto_muted = record_abuse_violation(
                 scope='emoji_spam',
                 user_id=self.user.id,
                 room=self.chatroom_name,
@@ -868,6 +937,8 @@ class ChatroomConsumer(WebsocketConsumer):
                 mute_seconds=int(getattr(settings, 'CHAT_ABUSE_MUTE_SECONDS', 60)),
                 weight=2,
             )
+            if auto_muted:
+                self._send_cooldown(auto_muted, reason='muted')
             return
 
         # Room-wide flood protection (WS direct send).
@@ -877,7 +948,7 @@ class ChatroomConsumer(WebsocketConsumer):
             period_seconds=int(getattr(settings, 'ROOM_MSG_RATE_PERIOD', 10)),
         )
         if not room_rl.allowed:
-            record_abuse_violation(
+            _strikes, muted_remaining = record_abuse_violation(
                 scope='room_flood',
                 user_id=self.user.id,
                 room=self.chatroom_name,
@@ -885,6 +956,7 @@ class ChatroomConsumer(WebsocketConsumer):
                 threshold=int(getattr(settings, 'CHAT_ABUSE_STRIKE_THRESHOLD', 5)),
                 mute_seconds=int(getattr(settings, 'CHAT_ABUSE_MUTE_SECONDS', 60)),
             )
+            self._send_cooldown(muted_remaining or room_rl.retry_after, reason='rate_limit')
             return
 
         # Duplicate message detection.
@@ -895,7 +967,7 @@ class ChatroomConsumer(WebsocketConsumer):
             ttl_seconds=int(getattr(settings, 'DUPLICATE_MSG_TTL', 15)),
         )
         if is_dup:
-            record_abuse_violation(
+            _strikes, muted_remaining = record_abuse_violation(
                 scope='dup_msg',
                 user_id=self.user.id,
                 room=self.chatroom_name,
@@ -904,6 +976,7 @@ class ChatroomConsumer(WebsocketConsumer):
                 mute_seconds=int(getattr(settings, 'CHAT_ABUSE_MUTE_SECONDS', 60)),
                 weight=2,
             )
+            self._send_cooldown(muted_remaining or _dup_retry, reason='cooldown')
             return
 
         # Fast long message heuristic (WS path).
@@ -915,7 +988,7 @@ class ChatroomConsumer(WebsocketConsumer):
             min_interval_seconds=int(getattr(settings, 'FAST_LONG_MSG_MIN_INTERVAL', 1)),
         )
         if is_fast:
-            record_abuse_violation(
+            _strikes, muted_remaining = record_abuse_violation(
                 scope='fast_long_msg',
                 user_id=self.user.id,
                 room=self.chatroom_name,
@@ -923,6 +996,7 @@ class ChatroomConsumer(WebsocketConsumer):
                 threshold=int(getattr(settings, 'CHAT_ABUSE_STRIKE_THRESHOLD', 5)),
                 mute_seconds=int(getattr(settings, 'CHAT_ABUSE_MUTE_SECONDS', 60)),
             )
+            self._send_cooldown(muted_remaining or _fast_retry, reason='cooldown')
             return
 
         client_nonce = None
@@ -956,7 +1030,7 @@ class ChatroomConsumer(WebsocketConsumer):
 
             trim_chat_group_messages(
                 chat_group_id=getattr(self.chatroom, 'id', 0),
-                keep_last=int(getattr(settings, 'CHAT_MAX_MESSAGES_PER_ROOM', 12000)),
+                keep_last=int(getattr(settings, 'CHAT_MAX_MESSAGES_PER_ROOM', 900)),
             )
         except Exception:
             pass
@@ -973,8 +1047,13 @@ class ChatroomConsumer(WebsocketConsumer):
 
         # Best-effort link preview (kept intentionally lightweight).
         try:
-            url = extract_first_http_url(body)
-            preview = fetch_link_preview(url) if url else None
+            is_gif, _gif_url = self._parse_gif_message(body)
+            if not is_gif:
+                url = extract_first_http_url(body)
+                preview = fetch_link_preview(url) if url else None
+            else:
+                preview = None
+
             if preview:
                 message.link_url = preview.url
                 message.link_title = preview.title
@@ -1187,6 +1266,22 @@ class ChatroomConsumer(WebsocketConsumer):
                 'type': 'read_receipt',
                 'reader_id': event.get('reader_id') or 0,
                 'last_read_id': event.get('last_read_id') or 0,
+            }))
+        except Exception:
+            return
+
+    def one_time_seen_handler(self, event):
+        """A one-time image was opened by a viewer.
+
+        Client will show an in-bubble status for the sender.
+        """
+        try:
+            self.send(text_data=json.dumps({
+                'type': 'one_time_seen',
+                'message_id': event.get('message_id') or 0,
+                'author_id': event.get('author_id') or 0,
+                'viewer_id': event.get('viewer_id') or 0,
+                'viewer_name': event.get('viewer_name') or '',
             }))
         except Exception:
             return

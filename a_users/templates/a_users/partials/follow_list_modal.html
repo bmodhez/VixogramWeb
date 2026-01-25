@@ -79,8 +79,6 @@ This template is loaded into the profile follow-list modal body via HTMX.
                   action="{% url 'follow-toggle' u.username %}"
                   hx-post="{% url 'follow-toggle' u.username %}"
                   hx-swap="none"
-                  hx-confirm="Are you sure you want to unfollow @{{ u.username }}?"
-                  data-confirm-title="Unfollow"
                 >
                   {% csrf_token %}
                   <button type="submit" class="text-xs bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded-lg transition-colors">

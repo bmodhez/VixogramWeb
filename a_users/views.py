@@ -1,3 +1,5 @@
+import json
+
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
@@ -106,7 +108,7 @@ def profile_view(request, username=None):
         elif is_private and not is_owner:
             follow_lists_locked_reason = 'This account is private. Only counts are visible.'
         
-    return render(request, 'a_users/profile.html', {
+    ctx = {
         'profile': user_profile,
         'profile_user': profile_user,
         'followers_count': followers_count,
@@ -119,7 +121,14 @@ def profile_view(request, username=None):
         'is_private': is_private,
         'show_presence': show_presence,
         'presence_online': visible_online,
-    })
+    }
+
+    # If opened from chat (HTMX), render a lightweight modal fragment instead of a full page.
+    is_htmx = (request.headers.get('HX-Request') == 'true') or (request.META.get('HTTP_HX_REQUEST') == 'true')
+    if is_htmx and request.GET.get('modal') == '1':
+        return render(request, 'a_users/partials/profile_modal.html', ctx)
+
+    return render(request, 'a_users/profile.html', ctx)
 
 
 @login_required
@@ -334,8 +343,27 @@ def profile_following_partial_view(request, username: str):
 @login_required
 def report_user_view(request, username: str):
     target = get_object_or_404(User, username=username)
+
+    is_htmx = (
+        str(request.headers.get('HX-Request') or '').lower() == 'true'
+        or str(request.META.get('HTTP_HX_REQUEST') or '').lower() == 'true'
+    )
+    is_modal = bool(is_htmx and request.GET.get('modal') == '1')
+
     if target.id == request.user.id:
         messages.error(request, 'You cannot report yourself.')
+
+        if is_modal:
+            resp = HttpResponse(status=204)
+            resp['HX-Trigger'] = json.dumps({
+                'vixo:closeGlobalModal': True,
+                'vixo:toast': {
+                    'message': 'You cannot report yourself.',
+                    'kind': 'error',
+                },
+            })
+            return resp
+
         return redirect('profile')
 
     form = ReportUserForm(request.POST or None)
@@ -358,16 +386,26 @@ def report_user_view(request, username: str):
                 obj.save(update_fields=['reason', 'details'])
 
             messages.success(request, f"Report submitted for @{target.username}.")
+
+            if is_modal:
+                resp = HttpResponse(status=204)
+                resp['HX-Trigger'] = json.dumps({
+                    'vixo:closeGlobalModal': True,
+                    'vixo:toast': {
+                        'message': f"Report submitted for @{target.username}.",
+                        'kind': 'success',
+                    },
+                })
+                return resp
+
             return redirect('profile-user', username=target.username)
 
-    return render(
-        request,
-        'a_users/report_user.html',
-        {
-            'target_user': target,
-            'form': form,
-        },
-    )
+    template_name = 'a_users/partials/report_user_modal.html' if is_modal else 'a_users/report_user.html'
+
+    return render(request, template_name, {
+        'target_user': target,
+        'form': form,
+    })
 
 
 @login_required
@@ -434,12 +472,17 @@ def follow_toggle_view(request, username: str):
         return redirect('profile')
 
     rel = Follow.objects.filter(follower=request.user, following=target)
+    toast_message = None
     if rel.exists():
         rel.delete()
-        messages.success(request, f'Unfollowed @{target.username}')
+        toast_message = f'Unfollowed @{target.username}'
+        if not is_htmx:
+            messages.success(request, toast_message)
     else:
         Follow.objects.create(follower=request.user, following=target)
-        messages.success(request, f'Following @{target.username}')
+        toast_message = f'Following @{target.username}'
+        if not is_htmx:
+            messages.success(request, toast_message)
 
         # Optional in-app notification: only if user is offline (best-effort)
         try:
@@ -477,6 +520,23 @@ def follow_toggle_view(request, username: str):
         except Exception:
             pass
 
+    if is_htmx and request.GET.get('modal') == '1':
+        # If the follow action happened inside the profile modal, re-render the modal
+        # so the follow/unfollow button updates without leaving the chat page.
+        resp = profile_view(request, username=username)
+        try:
+            triggers = {
+                'vixo:toast': {
+                    'message': toast_message or '',
+                    'kind': 'success',
+                    'durationMs': 3500,
+                }
+            }
+            resp['HX-Trigger'] = json.dumps(triggers)
+        except Exception:
+            pass
+        return resp
+
     if is_htmx:
         # Tell HTMX clients to refresh counts + optionally the modal list.
         try:
@@ -487,15 +547,21 @@ def follow_toggle_view(request, username: str):
             following_count = None
 
         resp = HttpResponse(status=204)
-        resp['HX-Trigger'] = (
-            '{'
-            '  "followChanged": {'
-            f'    "profile_username": "{request.user.username}",' 
-            f'    "followers_count": {followers_count if followers_count is not None else "null"},'
-            f'    "following_count": {following_count if following_count is not None else "null"}'
-            '  }'
-            '}'
-        )
+        try:
+            resp['HX-Trigger'] = json.dumps({
+                'followChanged': {
+                    'profile_username': request.user.username,
+                    'followers_count': followers_count,
+                    'following_count': following_count,
+                },
+                'vixo:toast': {
+                    'message': toast_message or '',
+                    'kind': 'success',
+                    'durationMs': 3500,
+                }
+            })
+        except Exception:
+            pass
         return resp
 
     return redirect('profile-user', username=username)

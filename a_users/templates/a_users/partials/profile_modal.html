@@ -1,0 +1,149 @@
+{% load static %}
+{% load user_filters %}
+
+<div class="fixed inset-0 z-[60]" role="dialog" aria-modal="true" aria-label="Profile">
+    <div class="absolute inset-0 bg-black/60 vixo-modal-overlay" data-modal-backdrop></div>
+
+    <div class="relative min-h-full flex items-center justify-center px-4 py-8 pointer-events-none">
+        <div class="w-full max-w-md pointer-events-auto vixo-modal-card">
+            <div class="relative rounded-2xl shadow-2xl border border-white/10 overflow-hidden">
+                <!-- Full-card background -->
+                <div class="absolute inset-0">
+                    {% if profile.cover_url %}
+                        <img src="{{ profile.cover_url }}" alt="Profile background" class="absolute inset-0 w-full h-full object-cover" />
+                    {% else %}
+                        <div class="absolute inset-0 bg-gradient-to-br from-purple-600/55 via-indigo-600/35 to-sky-600/55"></div>
+                    {% endif %}
+                    <!-- readability overlay (light->dark) -->
+                    <div class="absolute inset-0 bg-gradient-to-b from-black/20 via-black/45 to-black/75"></div>
+                    <div class="absolute inset-0 backdrop-blur-[2px]"></div>
+                </div>
+
+                <!-- Foreground content -->
+                <div class="relative bg-gray-900/40">
+                    <div class="flex justify-end p-3">
+                        <button type="button" data-modal-close class="bg-gray-900/60 hover:bg-gray-900/80 text-white rounded-lg px-4 py-2 transition-colors text-sm border border-white/10">
+                            Back
+                        </button>
+                    </div>
+
+                    <div class="px-8 pb-8 pt-2">
+                        <div class="flex justify-center">
+                            <img class="relative z-10 w-28 h-28 rounded-full object-cover ring-4 ring-black/40 border border-white/20"
+                                 src="{{ profile.avatar }}" alt="{{ profile.user.username }}">
+                        </div>
+
+                        <div class="text-center mt-4">
+
+                    <h1 class="text-2xl font-extrabold text-white inline-flex items-center justify-center gap-2">
+                        <span>{{ profile.name }}</span>
+                        {% if is_verified_badge %}
+                            <span
+                                class="inline-flex h-5 w-5 items-center justify-center rounded-full bg-sky-500/20 text-sky-300 text-[11px] leading-none"
+                                title="Verified"
+                                aria-label="Verified"
+                            >
+                                ✓
+                            </span>
+                        {% endif %}
+                    </h1>
+                    <p class="text-gray-400">@{{ profile.user.username }}</p>
+
+                    {% if show_presence %}
+                        <div class="mt-2 flex items-center justify-center gap-2 text-xs text-gray-300" aria-label="Online status">
+                            <span id="presence_dot" class="inline-block h-2.5 w-2.5 rounded-full {% if presence_online %}bg-emerald-400{% else %}bg-gray-500{% endif %}"></span>
+                            <span id="presence_text">{% if presence_online %}Online{% else %}Offline{% endif %}</span>
+                        </div>
+                    {% endif %}
+
+                    {% if profile_user and profile_user.date_joined %}
+                        <p class="mt-1 text-xs text-gray-500">Joined {{ profile_user.date_joined|date:"M d, Y" }}</p>
+                    {% endif %}
+
+                    <div class="mt-4 px-4 text-gray-200 text-sm leading-relaxed">
+                        {% if profile.info %}
+                            {{ profile.info|sanitize_bio }}
+                        {% else %}
+                            <span class="text-gray-300">No bio added yet.</span>
+                        {% endif %}
+                    </div>
+
+                    <div class="mt-4 flex items-center justify-center gap-6">
+                        <div class="text-center">
+                            <div id="followers_count_value" class="text-lg font-extrabold text-white">{{ followers_count|default:0 }}</div>
+                            <div class="text-xs text-gray-400">Followers</div>
+                        </div>
+                        <div class="text-center">
+                            <div id="following_count_value" class="text-lg font-extrabold text-white">{{ following_count|default:0 }}</div>
+                            <div class="text-xs text-gray-400">Following</div>
+                        </div>
+                    </div>
+
+                    {% if not show_follow_lists and follow_lists_locked_reason %}
+                        {% if is_private and not is_owner %}
+                            <div class="mt-6 text-xs text-gray-400">
+                                <span class="text-gray-300 font-semibold" aria-hidden="true">⊘</span>
+                                <span class="ml-2">This acc is private. You cannot view following/followers unless the user makes account public.</span>
+                            </div>
+                        {% else %}
+                            <div class="mt-6 text-sm text-gray-300 bg-gray-900/40 rounded-xl p-4 border border-gray-700">
+                                <div class="text-gray-200 font-semibold">Followers & Following</div>
+                                <div class="text-xs text-gray-400 mt-1">{{ follow_lists_locked_reason }}</div>
+                                {% if user.is_authenticated %}
+                                    <div class="mt-3">
+                                        <a href="{% url 'account_email' %}" class="bg-gray-700 hover:bg-gray-600 text-white rounded-lg px-4 py-2 transition-colors inline-block text-xs">Verify email</a>
+                                    </div>
+                                {% endif %}
+                            </div>
+                        {% endif %}
+                    {% endif %}
+
+                    {% if user.is_authenticated and profile_user and user != profile_user %}
+                        <div class="mt-5 space-y-2">
+                            <form
+                                method="post"
+                                action="{% url 'follow-toggle' profile_user.username %}"
+                                hx-post="{% url 'follow-toggle' profile_user.username %}?modal=1"
+                                hx-target="#global_modal_root"
+                                hx-swap="innerHTML"
+                                hx-push-url="false"
+                                data-loading-text="Loading…"
+                            >
+                                {% csrf_token %}
+                                <button type="submit"
+                                        class="w-full bg-gradient-to-r from-purple-500 via-indigo-500 to-sky-500 hover:from-purple-400 hover:via-indigo-400 hover:to-sky-400 text-white font-bold py-2 px-6 rounded-lg transition-colors">
+                                    {% if is_following %}Unfollow{% else %}Follow{% endif %}
+                                </button>
+                            </form>
+
+                                     <a
+                                         href="{% url 'report-user' profile_user.username %}"
+                                         hx-get="{% url 'report-user' profile_user.username %}?modal=1"
+                                         hx-target="#global_modal_root"
+                                         hx-swap="innerHTML"
+                                         hx-push-url="false"
+                                         class="block w-full text-center bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-6 rounded-lg transition-colors">
+                                Report
+                            </a>
+                        </div>
+                    {% endif %}
+
+                    {% if user.is_authenticated and user == profile.user %}
+                        <div class="mt-8 flex w-full gap-3">
+                            <a href="{% url 'profile-edit' %}"
+                               class="flex-1 inline-flex items-center justify-center text-center whitespace-nowrap bg-gradient-to-r from-purple-500 via-indigo-500 to-sky-500 hover:from-purple-400 hover:via-indigo-400 hover:to-sky-400 text-white font-bold py-2 px-4 rounded-lg transition-colors">
+                                Edit profile
+                            </a>
+                            <a href="{% url 'profile-settings' %}"
+                               class="flex-1 inline-flex items-center justify-center text-center whitespace-nowrap bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg transition-colors">
+                                Settings
+                            </a>
+                        </div>
+                    {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>

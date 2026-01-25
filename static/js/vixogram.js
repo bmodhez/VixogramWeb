@@ -353,9 +353,20 @@
   }
 
   function initGlobalLoadingIndicator() {
+    // Site-wide: only show the global loader for actual file uploads.
+    // Background fetches/HTMX requests can be frequent and would cause flashing.
+
     const el = document.getElementById('global-loading');
     const textEl = document.getElementById('global-loading-text');
-    if (!el) return;
+    if (!el) {
+      window.__vixoLoading = {
+        show: () => {},
+        hide: () => {},
+        inc: () => {},
+        dec: () => {},
+      };
+      return;
+    }
 
     let pending = 0;
     let hideTimer = null;
@@ -401,6 +412,19 @@
 
     window.__vixoLoading = { show, hide, inc, dec };
 
+    const hasFileSelected = (form) => {
+      try {
+        if (!form || !form.querySelectorAll) return false;
+        const inputs = form.querySelectorAll('input[type="file"]');
+        for (const inp of inputs) {
+          if (inp && inp.files && inp.files.length) return true;
+        }
+      } catch {
+        // ignore
+      }
+      return false;
+    };
+
     // Defer so other handlers (custom confirm, unsaved changes, htmx, etc.) can call preventDefault().
     const defer = (fn) => {
       try {
@@ -412,36 +436,8 @@
     };
 
     document.addEventListener('click', (e) => {
-      const a = e.target && e.target.closest ? e.target.closest('a') : null;
-      if (!a) return;
-      if (a.hasAttribute('download')) return;
-      if ((a.getAttribute('target') || '').toLowerCase() === '_blank') return;
-      if (a.getAttribute('data-no-loading') !== null) return;
-
-      const href = (a.getAttribute('href') || '').trim();
-      if (!href) return;
-      if (href.startsWith('#')) return;
-      if (href.startsWith('mailto:') || href.startsWith('tel:')) return;
-
-      try {
-        const url = new URL(href, window.location.href);
-        if (url.origin !== window.location.origin) return;
-      } catch {
-        return;
-      }
-
-      defer(() => {
-        try {
-          if (window.__vixoSkipLoadingOnce) {
-            window.__vixoSkipLoadingOnce = false;
-            return;
-          }
-        } catch {
-          // ignore
-        }
-        if (e.defaultPrevented) return;
-        show('Loading…');
-      });
+      // Loader is intentionally NOT shown for navigation.
+      // Kept only for upload submits.
     }, true);
 
     document.addEventListener('submit', (e) => {
@@ -449,7 +445,10 @@
       if (!form || !form.getAttribute) return;
       if (form.getAttribute('data-no-loading') !== null) return;
 
-      const text = (form.getAttribute('data-loading-text') || 'Loading…').trim() || 'Loading…';
+      // Only show loader when an actual file is being uploaded.
+      if (!hasFileSelected(form)) return;
+
+      const text = (form.getAttribute('data-loading-text') || 'Uploading… Please wait').trim() || 'Uploading… Please wait';
 
       defer(() => {
         if (e.defaultPrevented) return;
@@ -493,26 +492,22 @@
     };
 
     document.body.addEventListener('htmx:beforeRequest', (e) => {
+      // Only show loader for HTMX requests that are file uploads.
       try {
         const elt = (e && e.detail && e.detail.elt) ? e.detail.elt : e.target;
         const xhr = (e && e.detail) ? e.detail.xhr : null;
+        const form = (elt && elt.closest) ? elt.closest('form') : null;
+        if (!xhr) return;
+        if (!form) return;
+        if (form.getAttribute && form.getAttribute('data-no-loading') !== null) return;
+        if (!hasFileSelected(form)) return;
 
-        if (elt && elt.id === 'chat_message_form' && xhr) {
-          const fileInput = document.getElementById('chat_file_input');
-          const inUploadMode = !!(fileInput && fileInput.files && fileInput.files.length);
-          if (inUploadMode) {
-            uploadRequests.set(xhr, true);
-            minVisibleUntil = Math.max(minVisibleUntil, Date.now() + 5000);
-            inc('Uploading… Please wait');
-            return;
-          }
-        }
+        uploadRequests.set(xhr, true);
+        minVisibleUntil = Math.max(minVisibleUntil, Date.now() + 5000);
+        inc('Uploading… Please wait');
       } catch {
         // ignore
       }
-
-      if (shouldSkipHtmxLoader(e)) return;
-      inc('Loading…');
     });
     document.body.addEventListener('htmx:afterRequest', (e) => {
       try {
@@ -525,9 +520,7 @@
       } catch {
         // ignore
       }
-
-      if (shouldSkipHtmxLoader(e)) return;
-      dec();
+      // Non-upload HTMX requests don't touch the loader.
     });
     document.body.addEventListener('htmx:responseError', () => { pending = 0; hide(); });
     document.body.addEventListener('htmx:sendError', () => { pending = 0; hide(); });
@@ -537,8 +530,40 @@
       if (typeof window.fetch === 'function' && !window.fetch.__vixo_patched) {
         const origFetch = window.fetch.bind(window);
         const wrapped = function (...args) {
-          inc('Loading…');
-          return origFetch(...args).finally(() => dec());
+          // Default: do not show loader for fetch (prevents idle flashing).
+          // Opt-in by passing init.showLoading=true or header X-Vixo-Loading: 1
+          let shouldShow = false;
+          try {
+            const req = args && args.length ? args[0] : null;
+            const init = (args && args.length > 1) ? args[1] : null;
+            if (init && init.noLoading) shouldShow = false;
+
+            const pickHeader = (headers, key) => {
+              if (!headers) return '';
+              try {
+                if (typeof headers.get === 'function') return String(headers.get(key) || '');
+              } catch {}
+              try {
+                // Plain object
+                return String(headers[key] || headers[key.toLowerCase()] || '');
+              } catch {}
+              return '';
+            };
+
+            const initHeaders = init && init.headers ? init.headers : null;
+            const reqHeaders = req && req.headers ? req.headers : null;
+            const flag = (pickHeader(initHeaders, 'X-Vixo-No-Loading') || pickHeader(reqHeaders, 'X-Vixo-No-Loading')).trim();
+            if (flag === '1' || flag.toLowerCase() === 'true') shouldShow = false;
+
+            const enable = (pickHeader(initHeaders, 'X-Vixo-Loading') || pickHeader(reqHeaders, 'X-Vixo-Loading')).trim();
+            if (enable === '1' || enable.toLowerCase() === 'true') shouldShow = true;
+            if (init && init.showLoading === true) shouldShow = true;
+          } catch {
+            // ignore
+          }
+
+          if (shouldShow) inc('Loading…');
+          return origFetch(...args).finally(() => { if (shouldShow) dec(); });
         };
         wrapped.__vixo_patched = true;
         window.fetch = wrapped;
@@ -2078,10 +2103,74 @@
     })();
   }
 
+  function initMaintenancePolling(baseCfg) {
+    try {
+      const statusUrl = String(baseCfg && baseCfg.maintenanceStatusUrl ? baseCfg.maintenanceStatusUrl : '');
+      const maintenancePageUrl = String(baseCfg && baseCfg.maintenancePageUrl ? baseCfg.maintenancePageUrl : '/maintenance/');
+      const isStaff = !!(baseCfg && baseCfg.userIsStaff);
+      if (!statusUrl || isStaff) return;
+
+      const isOnMaintenancePage = () => {
+        try { return String(window.location.pathname || '').startsWith('/maintenance/'); } catch { return false; }
+      };
+
+      let stopped = false;
+
+      async function check() {
+        if (stopped) return;
+        if (isOnMaintenancePage()) return;
+        try {
+          const res = await fetch(statusUrl, {
+            method: 'GET',
+            credentials: 'same-origin',
+            cache: 'no-store',
+            headers: { 'Accept': 'application/json' },
+          });
+          if (!res.ok) return;
+          const data = await res.json();
+          if (data && data.enabled) {
+            window.location.href = maintenancePageUrl;
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      // Fast initial check + interval for near-realtime lock.
+      check();
+      const intervalMs = 3000;
+      const t = window.setInterval(check, intervalMs);
+      window.addEventListener('beforeunload', () => {
+        stopped = true;
+        try { window.clearInterval(t); } catch {}
+      }, { once: true });
+    } catch {
+      // ignore
+    }
+  }
+
+  function initDisableContextMenu() {
+    // NOTE: This only hides the context menu; it does not prevent users from viewing source/devtools.
+    try {
+      document.addEventListener('contextmenu', (e) => {
+        try {
+          e.preventDefault();
+          e.stopPropagation();
+        } catch {
+          // ignore
+        }
+        return false;
+      }, true);
+    } catch {
+      // ignore
+    }
+  }
+
   document.addEventListener('DOMContentLoaded', () => {
     const baseCfg = readJsonScript('vixo-config') || {};
 
     // Global init
+    initDisableContextMenu();
     initGlobalLoadingIndicator();
     initContactDropdown();
     initUserMenuDropdown();
@@ -2094,6 +2183,7 @@
     initVideoDecodeFallback();
     initHtmxConfirmBridge();
     initGlobalAnnouncementSocket();
+    initMaintenancePolling(baseCfg);
 
     document.body.addEventListener('htmx:configRequest', (event) => {
       event.detail.headers['X-CSRFToken'] = getCookie('csrftoken');

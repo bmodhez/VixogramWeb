@@ -1,6 +1,7 @@
 from django.db import models
 from django.contrib.auth.models import User
 from django.utils import timezone
+from datetime import timedelta
 import shortuuid
 from PIL import Image
 import os
@@ -119,6 +120,16 @@ class GroupMessage(models.Model):
     body = models.CharField(max_length=300, blank=True, null=True)
     file = models.FileField(upload_to='files/', blank=True, null=True)
     file_caption = models.CharField(max_length=300, blank=True, null=True)
+    # One-time view (private chats): recipient can open once, then it expires after N seconds.
+    one_time_view_seconds = models.PositiveSmallIntegerField(null=True, blank=True)
+    one_time_viewed_at = models.DateTimeField(null=True, blank=True)
+    one_time_viewed_by = models.ForeignKey(
+        User,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='one_time_views',
+    )
     link_url = models.URLField(max_length=500, blank=True, default='')
     link_title = models.CharField(max_length=300, blank=True, default='')
     link_description = models.CharField(max_length=500, blank=True, default='')
@@ -140,6 +151,25 @@ class GroupMessage(models.Model):
         elif self.file:
             return f'{self.author.username} : {self.filename}'
         return f'{self.author.username} : (empty message #{self.id})'
+
+    @property
+    def one_time_expires_at(self):
+        if not self.one_time_view_seconds or not self.one_time_viewed_at:
+            return None
+        try:
+            return self.one_time_viewed_at + timedelta(seconds=int(self.one_time_view_seconds))
+        except Exception:
+            return None
+
+    @property
+    def one_time_is_expired(self):
+        exp = self.one_time_expires_at
+        if not exp:
+            return False
+        try:
+            return timezone.now() >= exp
+        except Exception:
+            return True
     
     class Meta:
         ordering = ['-created']
@@ -180,6 +210,29 @@ class GroupMessage(models.Model):
         if lower.endswith('.m4v'):
             return 'video/x-m4v'
         return 'video/mp4'
+
+
+class OneTimeMessageView(models.Model):
+    """Per-viewer open record for one-time messages.
+
+    A (message, user) pair can only be created once.
+    """
+
+    message = models.ForeignKey(GroupMessage, related_name='one_time_views_v2', on_delete=models.CASCADE)
+    user = models.ForeignKey(User, related_name='one_time_message_views', on_delete=models.CASCADE)
+    viewed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['message', 'user'], name='uniq_one_time_view_message_user'),
+        ]
+        indexes = [
+            models.Index(fields=['message', 'user'], name='otv_message_user_idx'),
+            models.Index(fields=['user', '-viewed_at'], name='otv_user_viewed_idx'),
+        ]
+
+    def __str__(self):
+        return f"OneTimeView(m={self.message_id}, u={self.user_id})"
 
 
 class ModerationEvent(models.Model):

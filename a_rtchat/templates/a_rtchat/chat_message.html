@@ -14,10 +14,17 @@
 <div id="msg-{{ message.id }}" data-message-id="{{ message.id }}" data-author-id="{{ message.author_id }}" class="vixo-msg group relative w-full flex {% if message.author == user %}justify-end{% else %}justify-start{% endif %}{% if extra_classes %} {{ extra_classes }}{% endif %}">
     <div class="flex flex-col {% if message.author == user %}items-end{% else %}items-start{% endif %} max-w-[90%] sm:max-w-[75%] lg:max-w-[65%]">
 
-        <div data-message-header class="mb-1 px-1 w-full{% if prev_message and prev_message.author_id == message.author_id %} hidden{% endif %}">
+        <div data-message-header class="mb-0.5 px-1 w-full{% if prev_message and prev_message.author_id == message.author_id %} hidden{% endif %}">
             <div class="flex items-center gap-2">
                 {% if message.author != user %}
-                    <a href="{% url 'profile-user' message.author.username %}" class="inline-flex items-center gap-2 min-w-0">
+                    <a
+                        href="{% url 'profile-user' message.author.username %}"
+                        hx-get="{% url 'profile-user' message.author.username %}?modal=1"
+                        hx-target="#global_modal_root"
+                        hx-swap="innerHTML"
+                        hx-push-url="false"
+                        class="inline-flex items-center gap-2 min-w-0"
+                    >
                         <img src="{{ message.author.profile.avatar }}" class="w-6 h-6 rounded-full object-cover border border-white/10">
                         <span class="text-[14px] font-semibold text-gray-200 truncate">{{ message.author.profile.name|default:message.author.username }}</span>
                         {% if verified_user_ids and message.author_id in verified_user_ids %}
@@ -53,7 +60,7 @@
                 {% include 'a_rtchat/partials/reaction_picker.html' %}
             {% endif %}
 
-            <div data-message-bubble class="relative px-4 py-3 rounded-2xl shadow-sm shadow-black/20 backdrop-blur-md 
+            <div data-message-bubble class="relative px-3 py-2.5 rounded-2xl shadow-sm shadow-black/20 backdrop-blur-md 
                 {% if message.author == user %}
                     bg-gradient-to-r from-purple-500 via-indigo-500 to-sky-500 text-white vixo-keep-white rounded-tr-none border border-white/10
                 {% else %}
@@ -61,14 +68,23 @@
                 {% endif %}">
 
                 {% if message.reply_to %}
-                    <button type="button" data-scroll-to="msg-{{ message.reply_to.id }}" class="block w-full text-left mb-2">
-                        <div class="px-3 py-2 rounded-xl border-l-2 border-indigo-300/70 bg-white/5">
+                    <button type="button" data-scroll-to="msg-{{ message.reply_to.id }}" class="block w-full text-left mb-1.5">
+                        <div class="px-3 py-1.5 rounded-xl border-l-2 border-indigo-300/70 bg-white/5">
                             <div class="text-[10px] font-semibold text-gray-200/80">
                                 Replying to {{ message.reply_to.author.profile.name|default:message.reply_to.author.username }}
                             </div>
                             <div class="text-[11px] text-gray-100/80 truncate">
                                 {% if message.reply_to.body %}
-                                    {{ message.reply_to.body|escape|highlight_mentions }}
+                                    {% if message.reply_to.body|slice:":5" == "[GIF]" %}
+                                        {% with gif_url=message.reply_to.body|slice:"5:"|cut:" " %}
+                                            <span class="inline-flex items-center gap-2">
+                                                <img src="{{ gif_url|giphy_still_url }}" alt="GIF" class="h-6 w-10 rounded-md object-cover border border-white/10" loading="lazy" decoding="async" />
+                                                <span class="text-[11px] text-gray-100/80">GIF</span>
+                                            </span>
+                                        {% endwith %}
+                                    {% else %}
+                                        {{ message.reply_to.body|escape|highlight_mentions }}
+                                    {% endif %}
                                 {% elif message.reply_to.file %}
                                     {{ message.reply_to.filename }}
                                 {% endif %}
@@ -76,7 +92,7 @@
                         </div>
                     </button>
                 {% endif %}
-                <div class="text-[15px] sm:text-[16px] leading-relaxed text-white/95{% if message.author == user %} vixo-keep-white{% endif %}">{% include 'a_rtchat/partials/message_content.html' %}</div>
+                <div class="text-[14px] sm:text-[15px] leading-relaxed text-white/95{% if message.author == user %} vixo-keep-white{% endif %}">{% include 'a_rtchat/partials/message_content.html' %}</div>
 
                 {% if message.link_url %}
                     <a href="{{ message.link_url }}" target="_blank" rel="noopener noreferrer"
@@ -108,7 +124,7 @@
 
         {% include 'a_rtchat/partials/reactions_bar.html' %}
         
-        <div class="mt-1 px-1 flex items-center gap-1">
+        <div class="mt-0.5 px-1 flex items-center gap-1">
             {% if message.author == user and chat_group.is_private %}
                 {% with other_read=other_last_read_id|default:0 %}
                     <span class="text-[11px] text-gray-400/70" data-read-tick data-message-id="{{ message.id }}">

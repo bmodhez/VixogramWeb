@@ -1,5 +1,6 @@
 import json
 from datetime import timedelta
+from urllib.parse import urlparse
 
 from django.contrib.auth import get_user_model
 from django.shortcuts import render, redirect, get_object_or_404
@@ -33,7 +34,7 @@ from .moderation import moderate_message
 from .channels_utils import chatroom_channel_group_name
 from .mentions import extract_mention_usernames, resolve_mentioned_users
 from a_rtchat.link_policy import contains_link
-from .room_policy import room_allows_links, room_allows_uploads
+from .room_policy import room_allows_links, room_allows_uploads, is_free_promotion_room
 from .challenges import (
     get_active_challenge,
     check_message as check_challenge_message,
@@ -44,6 +45,35 @@ from .challenges import (
 )
 from .auto_badges import attach_auto_badges
 from .natasha_bot import trigger_natasha_reply_after_commit, NATASHA_USERNAME
+
+
+def _parse_gif_message(body: str) -> str | None:
+    """Return a validated GIF url from a '[GIF] <url>' message, else None."""
+    text = (body or '').strip()
+    if not text.startswith('[GIF]'):
+        return None
+    url = text[len('[GIF]'):].strip()
+    if not url:
+        return None
+
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return None
+
+    if parsed.scheme not in ('http', 'https'):
+        return None
+
+    host = (parsed.netloc or '').lower()
+    if not host:
+        return None
+
+    allowed_hosts = ('giphy.com', 'giphyusercontent.com')
+    if host in allowed_hosts:
+        return url
+    if any(host.endswith('.' + h) for h in allowed_hosts):
+        return url
+    return None
 
 
 def _log_blocked_message_event(
@@ -198,6 +228,39 @@ def _attach_reaction_pills(messages, user):
             if c:
                 pills.append({'emoji': emoji, 'count': c, 'reacted': (m.id, emoji) in reacted})
         m.reaction_pills = pills
+
+
+def _attach_one_time_view_flags(messages, user):
+    """Attach `one_time_viewed_by_me` attribute for template rendering.
+
+    This avoids N+1 queries when deciding whether to show the open button vs
+    an expired placeholder.
+    """
+    if not messages or not getattr(user, 'id', None):
+        return
+    message_ids = [
+        m.id
+        for m in messages
+        if getattr(m, 'id', None)
+        and getattr(m, 'one_time_view_seconds', None)
+        and getattr(m, 'file', None)
+    ]
+    if not message_ids:
+        return
+
+    try:
+        viewed = set(
+            OneTimeMessageView.objects.filter(user_id=user.id, message_id__in=message_ids)
+            .values_list('message_id', flat=True)
+        )
+    except Exception:
+        viewed = set()
+
+    for m in messages:
+        try:
+            m.one_time_viewed_by_me = m.id in viewed
+        except Exception:
+            m.one_time_viewed_by_me = False
 
 
 def _is_chat_blocked(user) -> bool:
@@ -364,11 +427,16 @@ def chat_view(request, chatroom_name='public-chat'):
                 status=404,
             )
     
-    # Show the latest 30 messages but render them oldest -> newest (so refresh doesn't invert order)
-    latest_messages = list(chat_group.chat_messages.order_by('-created')[:30])
+    # Show the latest N messages (default 900) but render them oldest -> newest
+    # (so refresh doesn't invert order).
+    initial_limit = int(getattr(settings, 'CHAT_MAX_MESSAGES_PER_ROOM', 900))
+    if initial_limit <= 0:
+        initial_limit = 900
+    latest_messages = list(chat_group.chat_messages.order_by('-created')[:initial_limit])
     latest_messages.reverse()
     chat_messages = latest_messages
     _attach_reaction_pills(chat_messages, request.user)
+    _attach_one_time_view_flags(chat_messages, request.user)
     form = ChatmessageCreateForm()
 
     chat_blocked = _is_chat_blocked(request.user)
@@ -451,6 +519,7 @@ def chat_view(request, chatroom_name='public-chat'):
 
     links_allowed = room_allows_links(chat_group)
     uploads_allowed = room_allows_uploads(chat_group)
+    gifs_allowed = not is_free_promotion_room(chat_group)
 
     uploads_used = 0
     uploads_remaining = None
@@ -524,12 +593,27 @@ def chat_view(request, chatroom_name='public-chat'):
             if caption:
                 caption = caption[:300]
 
+            raw_one_time = (request.POST.get('one_time_seconds') or '').strip()
+            one_time_seconds = None
+            if raw_one_time:
+                try:
+                    s = int(raw_one_time)
+                except Exception:
+                    s = 0
+                if s in (3, 8, 15):
+                    if not getattr(chat_group, 'is_private', False):
+                        return HttpResponse('<div class="text-xs text-red-400">One-time view is only available in private chats.</div>', status=400)
+                    one_time_seconds = s
+
             if getattr(upload, 'size', 0) > CHAT_UPLOAD_MAX_BYTES:
                 return HttpResponse('<div class="text-xs text-red-400">File is too large.</div>', status=413)
 
             content_type = (getattr(upload, 'content_type', '') or '').lower()
             if not (content_type.startswith('image/') or content_type.startswith('video/')):
                 return HttpResponse('<div class="text-xs text-red-400">Only photos/videos are allowed.</div>', status=400)
+
+            if one_time_seconds and not content_type.startswith('image/'):
+                return HttpResponse('<div class="text-xs text-red-400">One-time view is only supported for photos.</div>', status=400)
 
             uploads_used = _uploads_used_today(chat_group, request.user)
             if uploads_used >= CHAT_UPLOAD_LIMIT_PER_ROOM:
@@ -541,6 +625,7 @@ def chat_view(request, chatroom_name='public-chat'):
             message = GroupMessage.objects.create(
                 file=upload,
                 file_caption=caption or None,
+                one_time_view_seconds=one_time_seconds,
                 author=request.user,
                 group=chat_group,
             )
@@ -549,7 +634,7 @@ def chat_view(request, chatroom_name='public-chat'):
             try:
                 from a_rtchat.retention import trim_chat_group_messages
 
-                trim_chat_group_messages(chat_group_id=chat_group.id, keep_last=int(getattr(settings, 'CHAT_MAX_MESSAGES_PER_ROOM', 12000)))
+                trim_chat_group_messages(chat_group_id=chat_group.id, keep_last=int(getattr(settings, 'CHAT_MAX_MESSAGES_PER_ROOM', 900)))
             except Exception:
                 pass
 
@@ -854,11 +939,26 @@ def chat_view(request, chatroom_name='public-chat'):
         except Exception:
             pass
 
-        # Links are only allowed in private chats.
+        gifs_allowed = not is_free_promotion_room(chat_group)
+        gif_url = _parse_gif_message(raw_body or '')
+
+        # If it *looks* like a GIF message but doesn't validate, block it.
+        if raw_body and raw_body.strip().startswith('[GIF]'):
+            if not gifs_allowed:
+                resp = HttpResponse('', status=400)
+                resp.headers['HX-Trigger'] = json.dumps({'linksNotAllowed': {'reason': 'GIFs are not allowed in this room.'}})
+                return resp
+            if not gif_url:
+                resp = HttpResponse('', status=400)
+                resp.headers['HX-Trigger'] = json.dumps({'linksNotAllowed': {'reason': 'Invalid GIF. Only Giphy GIFs are supported.'}})
+                return resp
+
+        # Links are only allowed in private chats (GIF is a special exception; not in Free Promotion).
         if raw_body and contains_link(raw_body) and not links_allowed:
-            resp = HttpResponse('', status=400)
-            resp.headers['HX-Trigger'] = json.dumps({'linksNotAllowed': {'reason': 'Links are only allowed in private chats.'}})
-            return resp
+            if not (gif_url and gifs_allowed):
+                resp = HttpResponse('', status=400)
+                resp.headers['HX-Trigger'] = json.dumps({'linksNotAllowed': {'reason': 'Links are only allowed in private chats.'}})
+                return resp
 
         if raw_body:
             is_dup, dup_retry = is_duplicate_message(
@@ -1228,7 +1328,7 @@ def chat_view(request, chatroom_name='public-chat'):
 
                 trim_chat_group_messages(
                     chat_group_id=chat_group.id,
-                    keep_last=int(getattr(settings, 'CHAT_MAX_MESSAGES_PER_ROOM', 12000)),
+                    keep_last=int(getattr(settings, 'CHAT_MAX_MESSAGES_PER_ROOM', 900)),
                 )
             except Exception:
                 pass
@@ -1522,8 +1622,13 @@ def chat_view(request, chatroom_name='public-chat'):
         'otherDisplayName': other_display,
         'otherAvatarUrl': _safe_avatar(other_profile),
         'linksAllowed': bool(links_allowed),
+        'gifsAllowed': bool(gifs_allowed),
+        'giphyApiKey': 'mA2NToNf2QW36bSdNgOVfdmUj7w6W7sz',
+        'giphyLimit': 30,
         'chatBlocked': bool(chat_blocked),
     }
+
+    context['gifs_allowed'] = bool(gifs_allowed)
     
     return render(request, 'a_rtchat/chat.html', context)
 
@@ -1582,6 +1687,7 @@ def chat_config_view(request, chatroom_name):
                 chat_group.members.add(request.user)
 
     links_allowed = room_allows_links(chat_group)
+    gifs_allowed = not is_free_promotion_room(chat_group)
 
     def _safe_profile(user):
         try:
@@ -1624,6 +1730,9 @@ def chat_config_view(request, chatroom_name):
         'otherDisplayName': other_display,
         'otherAvatarUrl': _safe_avatar(other_profile),
         'linksAllowed': bool(links_allowed),
+        'gifsAllowed': bool(gifs_allowed),
+        'giphyApiKey': 'mA2NToNf2QW36bSdNgOVfdmUj7w6W7sz',
+        'giphyLimit': 30,
     }
     return JsonResponse(data)
 
@@ -2082,6 +2191,21 @@ def chat_file_upload(request, chatroom_name):
     if caption:
         caption = caption[:300]
 
+    raw_one_time = (request.POST.get('one_time_seconds') or '').strip()
+    one_time_seconds = None
+    if raw_one_time:
+        try:
+            s = int(raw_one_time)
+        except Exception:
+            s = 0
+        if s in (3, 8, 15):
+            if not getattr(chat_group, 'is_private', False):
+                return HttpResponse(
+                    '<div class="text-xs text-red-400">One-time view is only available in private chats.</div>',
+                    status=400,
+                )
+            one_time_seconds = s
+
     # Enforce max file size
     if getattr(upload, 'size', 0) > CHAT_UPLOAD_MAX_BYTES:
         return HttpResponse(
@@ -2097,6 +2221,12 @@ def chat_file_upload(request, chatroom_name):
             status=400,
         )
 
+    if one_time_seconds and not content_type.startswith('image/'):
+        return HttpResponse(
+            '<div class="text-xs text-red-400">One-time view is only supported for photos.</div>',
+            status=400,
+        )
+
     # Enforce per-user per-room upload limit
     uploads_used = _uploads_used_today(chat_group, request.user)
     if uploads_used >= CHAT_UPLOAD_LIMIT_PER_ROOM:
@@ -2108,6 +2238,7 @@ def chat_file_upload(request, chatroom_name):
     message = GroupMessage.objects.create(
         file=upload,
         file_caption=caption or None,
+        one_time_view_seconds=one_time_seconds,
         author=request.user,
         group=chat_group,
     )
@@ -2116,7 +2247,10 @@ def chat_file_upload(request, chatroom_name):
     try:
         from a_rtchat.retention import trim_chat_group_messages
 
-        trim_chat_group_messages(chat_group_id=chat_group.id, keep_last=int(getattr(settings, 'CHAT_MAX_MESSAGES_PER_ROOM', 12000)))
+        trim_chat_group_messages(
+            chat_group_id=chat_group.id,
+            keep_last=int(getattr(settings, 'CHAT_MAX_MESSAGES_PER_ROOM', 900)),
+        )
     except Exception:
         pass
 
@@ -2134,6 +2268,7 @@ def chat_file_upload(request, chatroom_name):
     # even if websockets are unavailable.
     if is_htmx:
         _attach_reaction_pills([message], request.user)
+        _attach_one_time_view_flags([message], request.user)
         verified_user_ids = get_verified_user_ids([getattr(request.user, 'id', None)])
         html = render(request, 'a_rtchat/chat_message.html', {
             'message': message,
@@ -2149,6 +2284,109 @@ def chat_file_upload(request, chatroom_name):
         return response
 
     return redirect('chatroom', chatroom_name)
+
+
+@login_required
+def message_one_time_open(request, message_id):
+    """Recipient opens a one-time image.
+
+    Per-viewer behavior: each viewer can open once (ever). The client handles the
+    countdown/hide; server enforces the one-open rule.
+    """
+    if request.method != 'POST':
+        raise Http404()
+
+    message = get_object_or_404(GroupMessage.objects.select_related('group', 'author'), pk=message_id)
+    chat_group = message.group
+
+    if not getattr(chat_group, 'is_private', False):
+        raise Http404()
+    if request.user == message.author:
+        return JsonResponse({'ok': False, 'error': 'sender_cannot_open'}, status=403)
+    if request.user not in chat_group.members.all():
+        raise Http404()
+
+    if not message.one_time_view_seconds:
+        return JsonResponse({'ok': False, 'error': 'not_one_time'}, status=400)
+    if not message.file or not message.is_image:
+        return JsonResponse({'ok': False, 'error': 'not_image'}, status=400)
+
+    # Already opened by this viewer?
+    if OneTimeMessageView.objects.filter(message=message, user=request.user).exists():
+        return JsonResponse({'ok': False, 'error': 'already_viewed'}, status=410)
+
+    # First open: create a per-view record.
+    try:
+        OneTimeMessageView.objects.create(message=message, user=request.user)
+    except Exception:
+        # In case of race (double click), treat as already viewed.
+        return JsonResponse({'ok': False, 'error': 'already_viewed'}, status=410)
+
+    # Notify the room so the sender can see "seen" state (best-effort).
+    try:
+        from channels.layers import get_channel_layer
+        from asgiref.sync import async_to_sync
+        from .channels_utils import chatroom_channel_group_name
+
+        viewer_name = ''
+        try:
+            viewer_name = (getattr(getattr(request.user, 'profile', None), 'name', '') or '').strip()
+        except Exception:
+            viewer_name = ''
+        if not viewer_name:
+            viewer_name = (getattr(request.user, 'username', '') or '').strip()
+
+        channel_layer = get_channel_layer()
+        async_to_sync(channel_layer.group_send)(
+            chatroom_channel_group_name(chat_group),
+            {
+                'type': 'one_time_seen_handler',
+                'message_id': message.id,
+                'author_id': message.author_id,
+                'viewer_id': getattr(request.user, 'id', None),
+                'viewer_name': viewer_name,
+            },
+        )
+    except Exception:
+        pass
+
+    seconds = int(message.one_time_view_seconds or 0)
+    expires_at = timezone.now() + timedelta(seconds=max(0, seconds))
+    return JsonResponse({'ok': True, 'seconds': seconds, 'expires_at': int(expires_at.timestamp())})
+
+
+@login_required
+def message_info_view(request, message_id: int):
+    """Show 'Info' (read-by) for a message in private chats."""
+    message = get_object_or_404(GroupMessage.objects.select_related('group', 'author'), pk=message_id)
+    chat_group = message.group
+
+    if not getattr(chat_group, 'is_private', False):
+        raise Http404()
+    if request.user not in chat_group.members.all():
+        raise Http404()
+    if request.user != message.author and not getattr(request.user, 'is_staff', False):
+        return HttpResponse('', status=403)
+
+    readers = []
+    try:
+        readers = list(
+            ChatReadState.objects.filter(group=chat_group, last_read_message_id__gte=message.id)
+            .select_related('user', 'user__profile')
+            .order_by('-updated')
+        )
+    except Exception:
+        readers = []
+
+    return render(
+        request,
+        'a_rtchat/partials/message_info_modal.html',
+        {
+            'message': message,
+            'chat_group': chat_group,
+            'read_states': readers,
+        },
+    )
 
 
 @login_required
@@ -2213,6 +2451,7 @@ def chat_poll_view(request, chatroom_name):
         return JsonResponse({'messages_html': '', 'last_id': after_id, 'online_count': online_count})
 
     _attach_reaction_pills(new_messages, request.user)
+    _attach_one_time_view_flags(new_messages, request.user)
 
     verified_user_ids = set()
     try:
@@ -2272,9 +2511,19 @@ def message_edit_view(request, message_id: int):
     if not body:
         return JsonResponse({'error': 'Message cannot be empty'}, status=400)
 
-    # Links are only allowed in private chats.
+    gifs_allowed = not is_free_promotion_room(chat_group)
+    gif_url = _parse_gif_message(body)
+
+    if body.startswith('[GIF]'):
+        if not gifs_allowed:
+            return JsonResponse({'error': 'GIFs are not allowed in this room.'}, status=400)
+        if not gif_url:
+            return JsonResponse({'error': 'Invalid GIF. Only Giphy GIFs are supported.'}, status=400)
+
+    # Links are only allowed in private chats (GIF is a special exception).
     if contains_link(body) and not room_allows_links(chat_group):
-        return JsonResponse({'error': 'Links are only allowed in private chats.'}, status=400)
+        if not (gif_url and gifs_allowed):
+            return JsonResponse({'error': 'Links are only allowed in private chats.'}, status=400)
 
     if body != (message.body or ''):
         message.body = body
@@ -3268,7 +3517,7 @@ def call_event_view(request, chatroom_name):
     try:
         from a_rtchat.retention import trim_chat_group_messages
 
-        trim_chat_group_messages(chat_group_id=chat_group.id, keep_last=int(getattr(settings, 'CHAT_MAX_MESSAGES_PER_ROOM', 12000)))
+        trim_chat_group_messages(chat_group_id=chat_group.id, keep_last=int(getattr(settings, 'CHAT_MAX_MESSAGES_PER_ROOM', 900)))
     except Exception:
         pass
 
