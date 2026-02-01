@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto">
+  <div class="rounded-2xl border border-gray-800 bg-gray-900/60 backdrop-blur p-6 sm:p-8 shadow-2xl shadow-black/20">
+    <h1 class="text-2xl sm:text-3xl font-extrabold text-white">Privacy Policy</h1>
+    <p class="mt-2 text-gray-300 leading-6">This page describes, at a high level, how Vixogram handles data. We’ll keep improving and updating these details.</p>
+
+    <div class="mt-6 space-y-4 text-sm text-gray-300">
+      <div class="rounded-xl border border-gray-800 bg-gray-950/30 p-4">
+        <div class="font-semibold text-white">What we collect</div>
+        <p class="mt-1">Basic account and usage information needed to run the service.</p>
+      </div>
+      <div class="rounded-xl border border-gray-800 bg-gray-950/30 p-4">
+        <div class="font-semibold text-white">How we use it</div>
+        <p class="mt-1">To provide chat features, improve safety, and keep the platform running smoothly.</p>
+      </div>
+      <div class="rounded-xl border border-gray-800 bg-gray-950/30 p-4">
+        <div class="font-semibold text-white">Questions</div>
+        <p class="mt-1">If you have questions, please contact us.</p>
+        <a class="mt-2 inline-block text-indigo-200 hover:text-indigo-100" href="{% url 'contact' %}">Contact Us</a>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

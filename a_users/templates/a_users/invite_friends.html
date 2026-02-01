@@ -19,10 +19,48 @@
             </div>
             <div class="rounded-2xl border border-gray-800 bg-gray-950/40 p-4">
                 <div class="text-xs uppercase tracking-wider text-gray-400">Rewards</div>
-                <div class="mt-1 text-sm font-semibold text-white">Coming soon</div>
-                <div class="mt-1 text-xs text-gray-500">Till then, collect as much points as you can.</div>
+                <div class="mt-1 text-sm font-semibold text-white">Founder Club</div>
+                <div class="mt-2 text-xs text-gray-400">
+                    👑 {{ required_points }} Points ({{ required_invites }} Invites)
+                </div>
+                <div class="mt-2 text-xs text-gray-500 space-y-1">
+                    <div>✅ Founder Club</div>
+                    <div>No ads (future)</div>
+                    <div>Special role</div>
+                    <div>Name glow / crown icon</div>
+                    <div>Access to beta features</div>
+                </div>
+                <div class="mt-3 text-[11px] text-gray-500">
+                    Account must be at least {{ min_account_age_days }} days old.
+                    After Founder Club is active, your account must stay active minimum 1 hour every day,
+                    otherwise the role will be removed.
+                    To reactivate, reapply will be available after 20 days.
+                </div>
             </div>
         </div>
+
+        {% if points|default:0 >= required_points %}
+            <div class="mt-5 rounded-2xl border border-gray-800 bg-gray-950/40 p-4">
+                <div class="text-sm font-semibold text-gray-200">Available redemption reward</div>
+                <div class="mt-2 text-sm font-semibold text-white">Founder Club</div>
+                <div class="mt-3 rounded-xl border border-gray-800 bg-gray-900/50 p-3">
+                    {% if is_founder_club %}
+                        <div class="text-sm text-emerald-300 font-semibold">Already active on your account ✅</div>
+                    {% elif founder_can_apply %}
+                        <a href="{% url 'founder-club-apply' %}" class="inline-flex items-center justify-center w-full bg-emerald-500 hover:bg-emerald-600 text-white font-semibold rounded-xl px-5 py-2.5 transition-colors">
+                            Fill up form • Avail this role
+                        </a>
+                    {% else %}
+                        <div class="text-xs text-gray-400">
+                            Not ready yet.
+                            {% if not founder_meets_invites %}Need {{ required_invites }} verified invites.{% endif %}
+                            {% if not founder_meets_age %} Account must be {{ min_account_age_days }} days old.{% endif %}
+                            {% if founder_reapply_at %} Reapply available after {{ founder_reapply_at|date:"M d, Y" }}.{% endif %}
+                        </div>
+                    {% endif %}
+                </div>
+            </div>
+        {% endif %}
 
         <div class="mt-5 rounded-2xl border border-gray-800 bg-gray-950/40 p-4">
             <div class="text-sm font-semibold text-gray-200">Your invite link</div>

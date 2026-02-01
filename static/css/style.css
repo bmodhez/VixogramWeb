@@ -35,6 +35,41 @@ body {
   font-family: Inter, ui-sans-serif, system-ui, sans-serif;
 }
 
+/* Founder Club UI (name glow + crown + badges) */
+.founder {
+  color: #ffd700;
+  text-shadow:
+    0 0 5px #ffd700,
+    0 0 10px #ffcc00,
+    0 0 20px #ff9900;
+  font-weight: 600;
+}
+
+.role-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  user-select: none;
+}
+
+.founder-badge {
+  background: linear-gradient(135deg, #ffcc00, #ff9900);
+  color: #000;
+  padding: 2px 6px;
+  border-radius: 6px;
+  font-size: 11px;
+  margin-left: 6px;
+  font-weight: 700;
+}
+
+/* Ensure global confirm/prompt always appear above any HTMX/global modals.
+   (Profile modal uses z-[60], while confirm/prompt were z-50 in markup.) */
+#confirm-modal,
+#prompt-modal {
+  z-index: 10000 !important;
+}
+
 /* Global announcement banner (admin-set) */
 .vixo-marquee {
   overflow: hidden;
@@ -62,11 +97,16 @@ body {
 
 /* Auth pages (login/signup): full background image + glass card */
 .vixo-auth-bg {
+  /* Defaults; can be overridden per-page via inline style. */
+  --vixo-auth-overlay: 0.78;
   background-image:
-    linear-gradient(rgba(2, 6, 23, 0.78), rgba(2, 6, 23, 0.78)),
+    linear-gradient(
+      rgba(2, 6, 23, var(--vixo-auth-overlay)),
+      rgba(2, 6, 23, var(--vixo-auth-overlay))
+    ),
     var(--vixo-auth-bg);
-  background-size: cover;
-  background-position: center;
+  background-size: var(--vixo-auth-bg-size, cover);
+  background-position: var(--vixo-auth-bg-position, center);
   background-repeat: no-repeat;
 
   /* Page transition (enter/leave) */
@@ -90,9 +130,11 @@ body.vixo-auth-page.vixo-page-leave .vixo-auth-bg {
   filter: blur(2px);
 }
 
-/* When side ads are hidden, force a single-column grid even on very wide screens. */
-body.vixo-auth-page .vixo-site-grid {
-  grid-template-columns: minmax(0, 100%) !important;
+/* Auth pages: force a single-column grid on mobile only. */
+@media (max-width: 639px) {
+  body.vixo-auth-page .vixo-site-grid {
+    grid-template-columns: minmax(0, 100%) !important;
+  }
 }
 
 /* Private chat: "new messages" jump indicator (logo bubble + arrow) */
@@ -298,11 +340,12 @@ html { scrollbar-width: thin; scrollbar-color: rgb(16 185 129) transparent; }
   -ms-overflow-style: none !important; /* IE/Edge */
 }
 
-/* Chat page: prevent a page-level scrollbar (the green bar at far right).
-   Keep scrolling inside #chat_container / #chat_sidebar_panel only. */
+/* Chat page: allow page-level scroll so the global footer + footer ads are reachable.
+  Keep the PAGE scrollbar visible (like profile page). Only chat panes hide scrollbars. */
 body.vixo-chat-page {
-  height: 100dvh;
-  overflow: hidden !important;
+  min-height: 100dvh;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
   overscroll-behavior-x: none;
   overscroll-behavior-y: auto;
 }
@@ -318,43 +361,6 @@ body.vixo-chat-page {
   #chat_composer_bar {
     bottom: calc(env(safe-area-inset-bottom) + 8px);
   }
-}
-
-html.vixo-chat-page {
-  height: 100dvh;
-  overflow: hidden !important;
-  overscroll-behavior-x: none;
-  overscroll-behavior-y: auto;
-  scrollbar-width: none; /* Firefox */
-  -ms-overflow-style: none; /* IE/old Edge */
-}
-
-html.vixo-chat-page::-webkit-scrollbar {
-  display: none !important;
-  width: 0 !important;
-  height: 0 !important;
-}
-
-/* Chat page: some browsers show an overlay scrollbar thumb briefly on programmatic scroll.
-   Our global scrollbar theme is green, so force ALL scrollbars to be invisible on chat page. */
-html.vixo-chat-page {
-  scrollbar-color: transparent transparent; /* Firefox */
-}
-
-html.vixo-chat-page * {
-  scrollbar-width: none; /* Firefox */
-  -ms-overflow-style: none; /* IE/old Edge */
-}
-
-html.vixo-chat-page *::-webkit-scrollbar {
-  display: none !important;
-  width: 0 !important;
-  height: 0 !important;
-}
-
-html.vixo-chat-page *::-webkit-scrollbar-thumb,
-html.vixo-chat-page *::-webkit-scrollbar-track {
-  background: transparent !important;
 }
 
 #chat_container::-webkit-scrollbar,

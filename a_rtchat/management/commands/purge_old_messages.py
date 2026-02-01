@@ -46,9 +46,9 @@ class Command(BaseCommand):
 
         keep_last_opt = options.get('keep_last')
         try:
-            keep_last = int(keep_last_opt) if keep_last_opt is not None else int(getattr(settings, 'CHAT_MAX_MESSAGES_PER_ROOM', 900))
+            keep_last = int(keep_last_opt) if keep_last_opt is not None else int(getattr(settings, 'CHAT_MAX_MESSAGES_PER_ROOM', 300))
         except Exception:
-            keep_last = int(getattr(settings, 'CHAT_MAX_MESSAGES_PER_ROOM', 900))
+            keep_last = int(getattr(settings, 'CHAT_MAX_MESSAGES_PER_ROOM', 300))
         keep_last = max(1, int(keep_last))
 
         cutoff = timezone.now() - timedelta(days=days)
@@ -56,7 +56,7 @@ class Command(BaseCommand):
         # We only delete messages from rooms that exceed `keep_last`.
         # This prevents low-volume group chats (even with old messages) from losing history.
         candidates = list(
-            GroupMessage.objects.filter(created__lt=cutoff)
+            GroupMessage.objects.filter(created__lt=cutoff, group__is_private=False)
             .order_by("created", "id")
             .values_list("id", "group_id")[:batch]
         )
@@ -73,7 +73,7 @@ class Command(BaseCommand):
         counts = {
             row['group_id']: int(row['c'] or 0)
             for row in (
-                GroupMessage.objects.filter(group_id__in=group_ids)
+                GroupMessage.objects.filter(group_id__in=group_ids, group__is_private=False)
                 .values('group_id')
                 .annotate(c=Count('id'))
             )

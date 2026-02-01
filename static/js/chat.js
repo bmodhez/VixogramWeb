@@ -379,6 +379,275 @@
         // ignore
     }
 
+    // --- GIF picker (initialize early so the button always responds) ---
+    (function initGifPickerEarly() {
+        if (window.__vixoGifPickerInitDone) return;
+
+        const btn = document.getElementById('gif_btn');
+        const panel = document.getElementById('gif_panel');
+        if (!btn || !panel) return;
+
+        const gifsAllowed = !!cfg.gifsAllowed;
+        const apiKey = String(cfg.giphyApiKey || '').trim();
+        const limit = parseInt(cfg.giphyLimit || '30', 10) || 30;
+
+        const closeBtn = document.getElementById('gif_close');
+        const searchInput = document.getElementById('gif_search');
+        const statusEl = document.getElementById('gif_status');
+        const resultsEl = document.getElementById('gif_results');
+        const form = document.getElementById('chat_message_form');
+        const input = document.getElementById('id_body');
+
+        if (!gifsAllowed) {
+            // Server should not render the button, but guard anyway.
+            try { btn.classList.add('hidden'); } catch {}
+            return;
+        }
+
+        // Mark initialized even if apiKey is missing (we still want a friendly response).
+        window.__vixoGifPickerInitDone = true;
+
+        let open = false;
+        let debounceId = null;
+        let activeReq = 0;
+        let hasLoadedInitial = false;
+
+        function renderStatus(text) {
+            if (!statusEl) return;
+            statusEl.textContent = String(text || '');
+        }
+
+        function renderResultsHtml(html) {
+            if (!resultsEl) return;
+            resultsEl.innerHTML = html || '';
+        }
+
+        function positionPanel() {
+            if (!panel || !btn) return;
+            if (panel.classList.contains('hidden')) return;
+
+            // Desktop: let CSS positioning handle it.
+            try {
+                if (window.matchMedia && window.matchMedia('(min-width: 640px)').matches) {
+                    panel.style.left = '';
+                    panel.style.right = '';
+                    panel.style.top = '';
+                    panel.style.bottom = '';
+                    panel.style.display = '';
+                    panel.style.visibility = '';
+                    return;
+                }
+            } catch {}
+
+            const prevVis = panel.style.visibility;
+            panel.style.visibility = 'hidden';
+            panel.style.display = 'block';
+
+            const panelRect = panel.getBoundingClientRect();
+            const panelW = panelRect.width || 384;
+            const panelH = panelRect.height || 320;
+            const btnRect = btn.getBoundingClientRect();
+
+            const padding = 12;
+            const gap = 10;
+
+            let left = btnRect.right - panelW;
+            left = Math.max(padding, Math.min(left, window.innerWidth - panelW - padding));
+
+            const canPlaceAbove = (btnRect.top - panelH - gap) >= padding;
+
+            panel.style.left = `${Math.round(left)}px`;
+            panel.style.right = 'auto';
+
+            if (canPlaceAbove) {
+                let top = btnRect.top - gap - panelH;
+                top = Math.max(padding, Math.min(top, window.innerHeight - panelH - padding));
+                panel.style.top = `${Math.round(top)}px`;
+                panel.style.bottom = 'auto';
+            } else {
+                let top = btnRect.bottom + gap;
+                top = Math.max(padding, Math.min(top, window.innerHeight - panelH - padding));
+                panel.style.top = `${Math.round(top)}px`;
+                panel.style.bottom = 'auto';
+            }
+
+            panel.style.visibility = prevVis || '';
+        }
+
+        function setPanelOpen(next) {
+            open = !!next;
+            if (open) {
+                panel.classList.remove('hidden');
+                try { panel.style.visibility = 'hidden'; } catch {}
+                positionPanel();
+                requestAnimationFrame(() => {
+                    try {
+                        panel.classList.remove('opacity-0', 'scale-95', 'pointer-events-none');
+                        panel.classList.add('opacity-100', 'scale-100', 'pointer-events-auto');
+                    } catch {}
+                    try { panel.style.visibility = ''; } catch {}
+                });
+                try { if (searchInput) searchInput.focus(); } catch {}
+            } else {
+                try {
+                    panel.classList.add('opacity-0', 'scale-95', 'pointer-events-none');
+                    panel.classList.remove('opacity-100', 'scale-100', 'pointer-events-auto');
+                } catch {}
+                window.setTimeout(() => {
+                    if (!open) {
+                        try { panel.classList.add('hidden'); } catch {}
+                    }
+                }, 160);
+            }
+        }
+
+        function renderResults(items) {
+            if (!resultsEl) return;
+            resultsEl.innerHTML = '';
+            if (!items || !items.length) {
+                resultsEl.innerHTML = '<div class="col-span-2 text-xs text-gray-400">No GIFs found.</div>';
+                return;
+            }
+            const frag = document.createDocumentFragment();
+            for (const it of items) {
+                const images = it && it.images ? it.images : null;
+                const url = images && images.fixed_width && images.fixed_width.url ? String(images.fixed_width.url) : '';
+                const thumb = images && images.fixed_width_small && images.fixed_width_small.url ? String(images.fixed_width_small.url) : url;
+                if (!url) continue;
+                const b = document.createElement('button');
+                b.type = 'button';
+                b.className = 'relative overflow-hidden rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 transition';
+                b.setAttribute('data-gif-url', url);
+                b.innerHTML = `<img src="${__escapeHtml(thumb)}" alt="GIF" class="w-full h-28 object-cover" loading="lazy" decoding="async" />`;
+                frag.appendChild(b);
+            }
+            resultsEl.appendChild(frag);
+            try { positionPanel(); } catch {}
+        }
+
+        async function loadTrending() {
+            if (!apiKey) return;
+            const reqId = ++activeReq;
+            renderStatus('Loading trending...');
+            try {
+                const url = `https://api.giphy.com/v1/gifs/trending?api_key=${encodeURIComponent(apiKey)}&limit=${encodeURIComponent(String(limit))}`;
+                const resp = await fetch(url, { method: 'GET' });
+                const data = await resp.json().catch(() => null);
+                if (reqId !== activeReq) return;
+                const items = data && Array.isArray(data.data) ? data.data : [];
+                hasLoadedInitial = true;
+                renderStatus(items.length ? 'Trending GIFs' : 'No trending GIFs');
+                renderResults(items);
+            } catch {
+                if (reqId !== activeReq) return;
+                renderStatus('Failed to load GIFs.');
+                renderResultsHtml('<div class="col-span-2 text-xs text-red-300">Could not reach Giphy.</div>');
+            }
+        }
+
+        async function search(q) {
+            const query = String(q || '').trim();
+            if (!apiKey) return;
+            if (!query) {
+                renderStatus('Trending GIFs');
+                if (!hasLoadedInitial) await loadTrending();
+                return;
+            }
+
+            const reqId = ++activeReq;
+            renderStatus('Searching...');
+            try {
+                const url = `https://api.giphy.com/v1/gifs/search?q=${encodeURIComponent(query)}&api_key=${encodeURIComponent(apiKey)}&limit=${encodeURIComponent(String(limit))}`;
+                const resp = await fetch(url, { method: 'GET' });
+                const data = await resp.json().catch(() => null);
+                if (reqId !== activeReq) return;
+                const items = data && Array.isArray(data.data) ? data.data : [];
+                renderStatus(items.length ? `Results: ${items.length}` : 'No results');
+                renderResults(items);
+            } catch {
+                if (reqId !== activeReq) return;
+                renderStatus('Failed to load GIFs.');
+                renderResultsHtml('<div class="col-span-2 text-xs text-red-300">Could not reach Giphy.</div>');
+            }
+        }
+
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            const next = !open;
+            setPanelOpen(next);
+            if (!next) return;
+
+            if (!apiKey) {
+                renderStatus('GIFs are not configured.');
+                renderResultsHtml('<div class="col-span-2 text-xs text-amber-200">Missing Giphy API key.</div>');
+                try { __popup('GIFs not configured', 'Giphy API key is missing in chat config.'); } catch {}
+                return;
+            }
+
+            // Load trending on first open.
+            const q = String((searchInput && searchInput.value) || '').trim();
+            if (!q) loadTrending();
+            try { positionPanel(); } catch {}
+        });
+
+        if (closeBtn) closeBtn.addEventListener('click', (e) => { e.preventDefault(); setPanelOpen(false); });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key !== 'Escape') return;
+            if (!open) return;
+            setPanelOpen(false);
+        }, true);
+
+        document.addEventListener('click', (e) => {
+            if (!open) return;
+            const inside = e.target && e.target.closest ? e.target.closest('#gif_panel, #gif_btn') : null;
+            if (!inside) setPanelOpen(false);
+        }, true);
+
+        window.addEventListener('resize', () => { if (open) positionPanel(); }, { passive: true });
+        window.addEventListener('scroll', () => { if (open) positionPanel(); }, true);
+
+        if (searchInput) {
+            searchInput.addEventListener('input', () => {
+                if (!apiKey) return;
+                if (debounceId) window.clearTimeout(debounceId);
+                debounceId = window.setTimeout(() => search(searchInput.value), 250);
+            });
+        }
+
+        if (resultsEl) {
+            resultsEl.addEventListener('click', (e) => {
+                const pick = e.target && e.target.closest ? e.target.closest('[data-gif-url]') : null;
+                if (!pick) return;
+                const url = String(pick.getAttribute('data-gif-url') || '').trim();
+                if (!url) return;
+                if (!form || !input) return;
+
+                const gifBody = `[GIF] ${url}`;
+                setPanelOpen(false);
+
+                const prevValue = input.value;
+                try {
+                    input.value = gifBody;
+                    if (form.requestSubmit) form.requestSubmit();
+                    else {
+                        const send = document.getElementById('chat_send_btn');
+                        if (send) send.click();
+                    }
+                } catch {
+                    // ignore
+                } finally {
+                    try { input.value = prevValue; } catch {}
+                }
+            });
+        }
+
+        renderStatus(apiKey ? 'Trending GIFs' : 'GIFs');
+        if (resultsEl && apiKey) {
+            resultsEl.innerHTML = '<div class="col-span-2 text-xs text-gray-400">Opening…</div>';
+        }
+    })();
+
     // --- Private code room rename (admin/staff) ---
     function __isSmallScreen() {
         try { return !window.matchMedia('(min-width: 640px)').matches; } catch { return true; }
@@ -590,28 +859,16 @@
     }
 
     function initSidebarSectionCollapse() {
-        const toggles = document.querySelectorAll('[data-vixo-collapse-toggle][data-vixo-collapse-key]');
-        if (!toggles || !toggles.length) return;
+        // Prevent double-binding if chat.js is injected multiple times.
+        if (window.__vixoSidebarSectionCollapseInitDone) return;
+        window.__vixoSidebarSectionCollapseInitDone = true;
+
+        const esc = (window.CSS && typeof window.CSS.escape === 'function')
+            ? window.CSS.escape
+            : (s) => String(s || '').replace(/[^a-zA-Z0-9_\-]/g, (ch) => `\\${ch}`);
 
         function storageKey(k) {
             return `vixo_sidebar_section_collapsed:${String(k || '')}`;
-        }
-
-        function setCollapsed(key, collapsed) {
-            const body = document.querySelector(`[data-vixo-collapse-body][data-vixo-collapse-key="${CSS.escape(String(key))}"]`);
-            const toggle = document.querySelector(`[data-vixo-collapse-toggle][data-vixo-collapse-key="${CSS.escape(String(key))}"]`);
-            if (!body || !toggle) return;
-
-            const chevron = toggle.querySelector('[data-vixo-collapse-chevron]');
-            if (collapsed) {
-                body.classList.add('hidden');
-                toggle.setAttribute('aria-expanded', 'false');
-                if (chevron) chevron.style.transform = 'rotate(-90deg)';
-            } else {
-                body.classList.remove('hidden');
-                toggle.setAttribute('aria-expanded', 'true');
-                if (chevron) chevron.style.transform = '';
-            }
         }
 
         function loadInitialState(key) {
@@ -623,27 +880,92 @@
             }
         }
 
-        toggles.forEach((btn) => {
+        function findBodyForToggle(btn, key) {
+            // Prefer a global lookup by key.
+            const byKey = document.querySelector(`[data-vixo-collapse-body][data-vixo-collapse-key="${esc(String(key))}"]`);
+            if (byKey) return byKey;
+
+            // Fallback: look near the toggle (handles partial renders / swapped fragments).
+            try {
+                const parent = btn && btn.parentElement;
+                if (parent) {
+                    const near = parent.querySelector(`[data-vixo-collapse-body][data-vixo-collapse-key="${esc(String(key))}"]`);
+                    if (near) return near;
+                }
+            } catch {
+                // ignore
+            }
+            return null;
+        }
+
+        function setCollapsed(btn, key, collapsed) {
+            const body = findBodyForToggle(btn, key);
+            if (!body) return;
+
+            const toggle = btn || document.querySelector(`[data-vixo-collapse-toggle][data-vixo-collapse-key="${esc(String(key))}"]`);
+            if (!toggle) return;
+
+            const chevron = toggle.querySelector ? toggle.querySelector('[data-vixo-collapse-chevron]') : null;
+            if (collapsed) {
+                body.classList.add('hidden');
+                try { toggle.setAttribute('aria-expanded', 'false'); } catch {}
+                if (chevron) chevron.style.transform = 'rotate(-90deg)';
+            } else {
+                body.classList.remove('hidden');
+                try { toggle.setAttribute('aria-expanded', 'true'); } catch {}
+                if (chevron) chevron.style.transform = '';
+            }
+        }
+
+        function persist(key, collapsed) {
+            try {
+                window.localStorage.setItem(storageKey(key), collapsed ? '1' : '0');
+            } catch {
+                // ignore
+            }
+        }
+
+        function applyInitial(root) {
+            const scope = root || document;
+            const toggles = scope.querySelectorAll ? scope.querySelectorAll('[data-vixo-collapse-toggle][data-vixo-collapse-key]') : [];
+            if (!toggles || !toggles.length) return;
+            toggles.forEach((btn) => {
+                const key = btn.getAttribute('data-vixo-collapse-key') || '';
+                if (!key) return;
+                setCollapsed(btn, key, loadInitialState(key));
+            });
+        }
+
+        // Apply initial state on first load.
+        applyInitial(document);
+
+        // Delegate clicks so it keeps working even if sidebar HTML is swapped.
+        document.addEventListener('click', (e) => {
+            const btn = e.target && e.target.closest ? e.target.closest('[data-vixo-collapse-toggle][data-vixo-collapse-key]') : null;
+            if (!btn) return;
+
             const key = btn.getAttribute('data-vixo-collapse-key') || '';
             if (!key) return;
 
-            // Initial
-            const collapsed = loadInitialState(key);
-            setCollapsed(key, collapsed);
+            const body = findBodyForToggle(btn, key);
+            if (!body) return;
 
-            btn.addEventListener('click', () => {
-                const body = document.querySelector(`[data-vixo-collapse-body][data-vixo-collapse-key="${CSS.escape(String(key))}"]`);
-                if (!body) return;
-                const isCollapsed = body.classList.contains('hidden');
-                const nextCollapsed = !isCollapsed;
-                setCollapsed(key, nextCollapsed);
-                try {
-                    window.localStorage.setItem(storageKey(key), nextCollapsed ? '1' : '0');
-                } catch {
-                    // ignore
-                }
+            const isCollapsed = body.classList.contains('hidden');
+            const nextCollapsed = !isCollapsed;
+            setCollapsed(btn, key, nextCollapsed);
+            persist(key, nextCollapsed);
+        }, true);
+
+        // If HTMX swaps any part of the sidebar, re-apply initial collapsed state.
+        try {
+            document.body.addEventListener('htmx:afterSwap', (ev) => {
+                const target = ev && ev.detail ? ev.detail.target : null;
+                if (!target) return;
+                applyInitial(target);
             });
-        });
+        } catch {
+            // ignore
+        }
     }
 
     try {
@@ -661,6 +983,7 @@
     const currentUsername = String(cfg.currentUsername || '');
     let lastOtherReadId = parseInt(cfg.otherLastReadId || 0, 10) || 0;
     const pollUrl = String(cfg.pollUrl || '');
+    const olderUrl = String(cfg.olderUrl || '');
     const inviteUrl = String(cfg.inviteUrl || '');
     const tokenUrl = String(cfg.tokenUrl || '');
     const presenceUrl = String(cfg.presenceUrl || '');
@@ -1994,7 +2317,101 @@
     const input = document.getElementById('id_body');
     const typedMsInput = document.getElementById('typed_ms');
     const messagesEl = document.getElementById('chat_messages');
-    const onlineCountEl = document.getElementById('online-count');
+    const loadOlderBtn = document.getElementById('chat_load_older');
+    const loadOlderWrap = document.getElementById('chat_load_older_wrap');
+    const onlineCountEl = document.getElementById('room-online-count');
+    const onlineCountMirrors = Array.from(document.querySelectorAll('[data-online-count-mirror]'));
+
+    let __loadingOlder = false;
+
+    async function loadOlderMessages() {
+        if (!olderUrl || !messagesEl || __loadingOlder) return;
+
+        const first = messagesEl.firstElementChild;
+        const beforeId = first && first.dataset ? (parseInt(first.dataset.messageId || '0', 10) || 0) : 0;
+        if (!beforeId) {
+            try { if (loadOlderWrap) loadOlderWrap.style.display = 'none'; } catch {}
+            return;
+        }
+
+        __loadingOlder = true;
+        const prevText = loadOlderBtn ? loadOlderBtn.textContent : '';
+        try {
+            if (loadOlderBtn) {
+                loadOlderBtn.disabled = true;
+                loadOlderBtn.textContent = 'Loading…';
+            }
+
+            const chatContainer = document.getElementById('chat_container');
+            const prevScrollHeight = chatContainer ? chatContainer.scrollHeight : 0;
+            const prevScrollTop = chatContainer ? chatContainer.scrollTop : 0;
+
+            const res = await fetch(`${olderUrl}?before=${beforeId}`, {
+                method: 'GET',
+                headers: { 'X-Requested-With': 'XMLHttpRequest' },
+                credentials: 'same-origin',
+            });
+            if (!res.ok) throw new Error('history_fetch_failed');
+
+            const data = await res.json();
+            const html = data && typeof data.messages_html === 'string' ? data.messages_html : '';
+            if (html) {
+                messagesEl.insertAdjacentHTML('afterbegin', html);
+                try { hydrateLocalTimes(messagesEl); } catch {}
+                try { applyConsecutiveHeaderGrouping(messagesEl); } catch {}
+
+                // Preserve viewport position when prepending.
+                if (chatContainer) {
+                    const newScrollHeight = chatContainer.scrollHeight;
+                    const delta = newScrollHeight - prevScrollHeight;
+                    chatContainer.scrollTop = prevScrollTop + (delta > 0 ? delta : 0);
+                }
+            }
+
+            const hasMore = !!(data && data.has_more);
+            if (!hasMore) {
+                try { if (loadOlderWrap) loadOlderWrap.style.display = 'none'; } catch {}
+            }
+        } catch {
+            // ignore
+        } finally {
+            __loadingOlder = false;
+            try {
+                if (loadOlderBtn) {
+                    loadOlderBtn.disabled = false;
+                    loadOlderBtn.textContent = prevText || 'Load older';
+                }
+            } catch {
+                // ignore
+            }
+        }
+    }
+
+    (function initLoadOlder() {
+        if (!loadOlderBtn) return;
+        loadOlderBtn.addEventListener('click', (e) => {
+            try { e.preventDefault(); } catch {}
+            loadOlderMessages();
+        });
+    })();
+
+    function __setOnlineCount(v) {
+        const val = (v === undefined || v === null) ? '' : String(v);
+        try { if (onlineCountEl) onlineCountEl.textContent = val; } catch {}
+        for (const el of onlineCountMirrors) {
+            try { el.textContent = val; } catch {}
+        }
+    }
+
+    // If HTMX swaps #room-online-count out-of-band, keep mirrors synced.
+    try {
+        if (onlineCountEl && typeof MutationObserver !== 'undefined') {
+            const obs = new MutationObserver(() => {
+                try { __setOnlineCount(onlineCountEl.textContent || ''); } catch {}
+            });
+            obs.observe(onlineCountEl, { characterData: true, childList: true, subtree: true });
+        }
+    } catch {}
 
     // Chat input behavior:
     // - Enter: send
@@ -2407,6 +2824,7 @@
     let __wsHeartbeatTimer = null;
     let __wsReconnectAttempt = 0;
     let __pollTimer = null;
+    let __pollInFlight = false;
 
     const __WS_HEARTBEAT_MS = 25_000;
     const __WS_RECONNECT_BASE_MS = 900;
@@ -2473,7 +2891,7 @@
 
     function startPolling() {
         if (__pollTimer) return;
-        __pollTimer = setInterval(poll, 1200);
+        __pollTimer = setInterval(poll, 3500);
     }
 
     function stopPolling() {
@@ -2727,9 +3145,10 @@
 
     function hydrateLocalTimes(root) {
         const container = root || document;
-        const nodes = container.querySelectorAll ? container.querySelectorAll('time[data-dt]') : [];
-        if (!nodes || !nodes.length) return;
+        const nodeList = container && container.querySelectorAll ? container.querySelectorAll('time[data-dt]') : null;
+        if (!nodeList || !nodeList.length) return;
 
+        const nodes = Array.from(nodeList);
         const timeFmt = new Intl.DateTimeFormat(undefined, {
             hour: '2-digit',
             minute: '2-digit',
@@ -2739,17 +3158,74 @@
             timeStyle: 'short',
         });
 
-        nodes.forEach((el) => {
+        const applyOne = (el) => {
             const iso = el.getAttribute('data-dt');
             if (!iso) return;
             const d = new Date(iso);
             if (Number.isNaN(d.getTime())) return;
+            try { el.textContent = timeFmt.format(d); } catch {}
+            try { el.setAttribute('title', fullFmt.format(d)); } catch {}
+            try { if (!el.getAttribute('datetime')) el.setAttribute('datetime', iso); } catch {}
+        };
 
-            el.textContent = timeFmt.format(d);
-            // Hover tooltip for clarity across dates/timezones
-            el.setAttribute('title', fullFmt.format(d));
-            if (!el.getAttribute('datetime')) el.setAttribute('datetime', iso);
-        });
+        // Chunk work to avoid long main-thread blocks on big rooms.
+        const batchSize = 200;
+        if (nodes.length <= batchSize) {
+            nodes.forEach(applyOne);
+            return;
+        }
+
+        let i = 0;
+        const run = () => {
+            const end = Math.min(nodes.length, i + batchSize);
+            for (; i < end; i++) applyOne(nodes[i]);
+            if (i < nodes.length) requestAnimationFrame(run);
+        };
+        requestAnimationFrame(run);
+    }
+
+    function __isMsgEl(el) {
+        try {
+            return !!(el && el.classList && el.classList.contains('vixo-msg') && el.getAttribute('data-message-id'));
+        } catch {
+            return false;
+        }
+    }
+
+    function __prevMsgEl(el) {
+        let cur = el ? el.previousElementSibling : null;
+        while (cur && !__isMsgEl(cur)) cur = cur.previousElementSibling;
+        return cur;
+    }
+
+    function __nextMsgEl(el) {
+        let cur = el ? el.nextElementSibling : null;
+        while (cur && !__isMsgEl(cur)) cur = cur.nextElementSibling;
+        return cur;
+    }
+
+    function __applyHeaderForEl(el, prevEl) {
+        if (!__isMsgEl(el)) return;
+        const prev = prevEl || __prevMsgEl(el);
+        const authorId = (el.getAttribute('data-author-id') || '').trim();
+        const prevAuthorId = prev ? (prev.getAttribute('data-author-id') || '').trim() : '';
+        const header = el.querySelector ? el.querySelector('[data-message-header]') : null;
+        if (!header) return;
+        if (prevAuthorId && authorId && authorId === prevAuthorId) header.classList.add('hidden');
+        else header.classList.remove('hidden');
+    }
+
+    function applyConsecutiveHeaderGroupingIncremental() {
+        if (!messagesEl) return;
+        const last = messagesEl.lastElementChild;
+        if (!last) return;
+        __applyHeaderForEl(last);
+    }
+
+    function applyConsecutiveHeaderGroupingWindow(anchorEl) {
+        if (!anchorEl) return;
+        __applyHeaderForEl(anchorEl);
+        __applyHeaderForEl(__nextMsgEl(anchorEl));
     }
 
     function applyConsecutiveHeaderGrouping(root) {
@@ -2757,16 +3233,33 @@
         if (!container || !container.querySelectorAll) return;
 
         const items = Array.from(container.querySelectorAll('.vixo-msg[data-message-id]'));
+        if (!items.length) return;
+
+        const batchSize = 250;
+        let i = 0;
         let prevAuthorId = null;
-        for (const el of items) {
-            const authorId = (el.getAttribute('data-author-id') || '').trim();
-            const header = el.querySelector('[data-message-header]');
-            if (header) {
-                if (prevAuthorId && authorId && authorId === prevAuthorId) header.classList.add('hidden');
-                else header.classList.remove('hidden');
+
+        const run = () => {
+            const end = Math.min(items.length, i + batchSize);
+            for (; i < end; i++) {
+                const el = items[i];
+                const authorId = (el.getAttribute('data-author-id') || '').trim();
+                const header = el.querySelector ? el.querySelector('[data-message-header]') : null;
+                if (header) {
+                    if (prevAuthorId && authorId && authorId === prevAuthorId) header.classList.add('hidden');
+                    else header.classList.remove('hidden');
+                }
+                prevAuthorId = authorId || null;
             }
-            prevAuthorId = authorId || null;
+            if (i < items.length) requestAnimationFrame(run);
+        };
+
+        // For small rooms, do it synchronously.
+        if (items.length <= batchSize) {
+            run();
+            return;
         }
+        requestAnimationFrame(run);
     }
 
     function revealChatContainer() {
@@ -2864,6 +3357,8 @@
             }
 
             if (payload.type === 'chat_message' && payload.html) {
+                const __wasNearBottom = isNearBottom();
+                let __insertedEl = null;
                 // De-dupe/reconcile WS echo for the same message.
                 try {
                     const nonce = payload.client_nonce ? String(payload.client_nonce) : '';
@@ -2890,6 +3385,7 @@
                                 const newEl = pending.nextElementSibling;
                                 pending.remove();
                                 if (newEl) newEl.style.visibility = 'visible';
+                                __insertedEl = newEl || null;
                             } catch {}
                             __pendingByNonce.delete(nonce);
 
@@ -2898,9 +3394,11 @@
                             window.__forceNextChatScroll = true;
                         } else {
                             messagesEl.insertAdjacentHTML('beforeend', payload.html);
+                            __insertedEl = messagesEl.lastElementChild;
                         }
                     } else {
                         messagesEl.insertAdjacentHTML('beforeend', payload.html);
+                        __insertedEl = messagesEl.lastElementChild;
                     }
                 } catch {
                     // ignore
@@ -2910,10 +3408,16 @@
                 if (messagesEl && messagesEl.classList.contains('hidden')) {
                     messagesEl.classList.remove('hidden');
                 }
-                hydrateLocalTimes(messagesEl);
-                applyConsecutiveHeaderGrouping(messagesEl);
+                // Hydrate only the inserted chunk; don't re-scan the whole DOM.
+                hydrateLocalTimes(__insertedEl || messagesEl);
+                try {
+                    if (__insertedEl) applyConsecutiveHeaderGroupingWindow(__insertedEl);
+                    else applyConsecutiveHeaderGroupingIncremental();
+                } catch {
+                    // ignore
+                }
                 updateLastIdFromDom();
-                const shouldForce = !!window.__forceNextChatScroll || (!!__chatAutoScrollEnabled && isNearBottom());
+                const shouldForce = !!window.__forceNextChatScroll || (!!__chatAutoScrollEnabled && __wasNearBottom);
                 if (window.__forceNextChatScroll) {
                     window.__forceNextChatScroll = false;
                     __chatAutoScrollEnabled = true;
@@ -2930,17 +3434,22 @@
             }
 
             if (payload.type === 'challenge_event' && payload.html) {
+                const __wasNearBottom = isNearBottom();
                 const emptyEl = document.getElementById('empty_state');
                 if (emptyEl) emptyEl.remove();
                 if (messagesEl && messagesEl.classList.contains('hidden')) {
                     messagesEl.classList.remove('hidden');
                 }
                 messagesEl.insertAdjacentHTML('beforeend', payload.html);
-                hydrateLocalTimes(messagesEl);
-                applyConsecutiveHeaderGrouping(messagesEl);
+                const __insertedEl = messagesEl.lastElementChild;
+                hydrateLocalTimes(__insertedEl || messagesEl);
+                try {
+                    if (__insertedEl) applyConsecutiveHeaderGroupingWindow(__insertedEl);
+                    else applyConsecutiveHeaderGroupingIncremental();
+                } catch {}
                 updateLastIdFromDom();
                 if (payload.state) setChallengeState(payload.state);
-                const shouldForce = !!window.__forceNextChatScroll || (!!__chatAutoScrollEnabled && isNearBottom());
+                const shouldForce = !!window.__forceNextChatScroll || (!!__chatAutoScrollEnabled && __wasNearBottom);
                 if (window.__forceNextChatScroll) {
                     window.__forceNextChatScroll = false;
                     __chatAutoScrollEnabled = true;
@@ -3018,8 +3527,12 @@
                 const el = document.getElementById(`msg-${payload.message_id}`);
                 if (el) {
                     el.outerHTML = payload.html;
-                    hydrateLocalTimes(document);
-                    applyConsecutiveHeaderGrouping(messagesEl);
+                    const replaced = document.getElementById(`msg-${payload.message_id}`);
+                    hydrateLocalTimes(replaced || document);
+                    try {
+                        if (replaced) applyConsecutiveHeaderGroupingWindow(replaced);
+                        else applyConsecutiveHeaderGrouping(messagesEl);
+                    } catch {}
                     applyReadTicks(lastOtherReadId);
                 }
                 return;
@@ -3040,7 +3553,7 @@
             }
 
             if (payload.type === 'online_count' && typeof payload.online_count !== 'undefined') {
-                if (onlineCountEl) onlineCountEl.textContent = payload.online_count;
+                __setOnlineCount(payload.online_count);
             }
 
             if (payload.type === 'call_invite') {
@@ -4000,7 +4513,14 @@
             return;
         }
         wsConnected = false;
+        if (__pollInFlight) return;
+        __pollInFlight = true;
         try {
+            try {
+                if (document.visibilityState === 'hidden') return;
+            } catch {
+                // ignore
+            }
             updateLastIdFromDom();
             const res = await fetch(`${pollUrl}?after=${lastId}`, {
                 credentials: 'same-origin',
@@ -4009,9 +4529,10 @@
             if (!res.ok) return;
             const data = await res.json();
             if (data && typeof data.online_count !== 'undefined') {
-                if (onlineCountEl) onlineCountEl.textContent = data.online_count;
+                __setOnlineCount(data.online_count);
             }
             if (data && data.messages_html) {
+                const __wasNearBottom = isNearBottom();
                 const emptyEl = document.getElementById('empty_state');
                 if (emptyEl) emptyEl.remove();
                 if (messagesEl && messagesEl.classList.contains('hidden')) {
@@ -4021,7 +4542,7 @@
                 hydrateLocalTimes(messagesEl);
                 applyConsecutiveHeaderGrouping(messagesEl);
                 updateLastIdFromDom();
-                if (__chatAutoScrollEnabled) forceScrollToBottomNow();
+                if (__chatAutoScrollEnabled && __wasNearBottom) forceScrollToBottomNow();
             }
             if (data && typeof data.last_id !== 'undefined') {
                 const newLast = parseInt(String(data.last_id), 10);
@@ -4029,6 +4550,8 @@
             }
         } catch {
             // ignore
+        } finally {
+            __pollInFlight = false;
         }
     }
 
@@ -4507,6 +5030,7 @@
     })();
 
     (function initGifPicker() {
+        if (window.__vixoGifPickerInitDone) return;
         const gifsAllowed = !!cfg.gifsAllowed;
         const apiKey = String(cfg.giphyApiKey || '').trim();
         const limit = parseInt(cfg.giphyLimit || '30', 10) || 30;
@@ -5079,6 +5603,31 @@
         }
 
         sync(true);
+
+        // Desktop safety: if something accidentally left the page scroll-locked,
+        // unlock it so the user can reach the footer.
+        try {
+            window.setTimeout(() => {
+                if (isMobile()) return;
+
+                const body = document.body;
+                if (!body || !body.classList.contains('overflow-hidden')) return;
+
+                // Only unlock when no known overlay is visible.
+                const globalModal = document.getElementById('global_modal_root');
+                const modalOpen = !!(globalModal && !globalModal.classList.contains('hidden') && (globalModal.innerHTML || '').trim().length);
+
+                const sidebarOverlayOpen = sidebar.classList.contains('fixed') || sidebar.classList.contains('inset-0');
+                const challengeDrawer = document.getElementById('challenge_drawer');
+                const challengeOpen = !!(challengeDrawer && !challengeDrawer.classList.contains('pointer-events-none') && !challengeDrawer.classList.contains('opacity-0'));
+
+                if (!modalOpen && !sidebarOverlayOpen && !challengeOpen) {
+                    body.classList.remove('overflow-hidden');
+                }
+            }, 250);
+        } catch {
+            // ignore
+        }
     })();
 
     (function initCodeRoomWaitingList() {

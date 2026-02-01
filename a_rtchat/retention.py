@@ -3,7 +3,7 @@ from __future__ import annotations
 from django.core.cache import cache
 
 
-def trim_chat_group_messages(*, chat_group_id: int, keep_last: int = 900) -> None:
+def trim_chat_group_messages(*, chat_group_id: int, keep_last: int | None = None) -> None:
     """Best-effort: keep only the newest `keep_last` messages for a room.
 
     This runs throttled because deleting can be expensive.
@@ -15,6 +15,14 @@ def trim_chat_group_messages(*, chat_group_id: int, keep_last: int = 900) -> Non
 
     if gid <= 0:
         return
+
+    if keep_last is None:
+        try:
+            from django.conf import settings
+
+            keep_last = int(getattr(settings, 'CHAT_MAX_MESSAGES_PER_ROOM', 250))
+        except Exception:
+            keep_last = 250
 
     try:
         keep_last = int(keep_last)

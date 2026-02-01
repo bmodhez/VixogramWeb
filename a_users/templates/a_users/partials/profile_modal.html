@@ -1,6 +1,10 @@
 {% load static %}
 {% load user_filters %}
 
+{% if profile_config %}
+    {{ profile_config|json_script:"vixo-profile-config" }}
+{% endif %}
+
 <div class="fixed inset-0 z-[60]" role="dialog" aria-modal="true" aria-label="Profile">
     <div class="absolute inset-0 bg-black/60 vixo-modal-overlay" data-modal-backdrop></div>
 
@@ -47,7 +51,21 @@
                             </span>
                         {% endif %}
                     </h1>
-                    <p class="text-gray-400">@{{ profile.user.username }}</p>
+                    <p class="text-gray-400">
+                        <span class="{% if profile_user and profile_user.profile and profile_user.profile.is_founder_club %}founder{% endif %}">
+                            {% if profile_user and profile_user.profile and profile_user.profile.is_founder_club %}👑{% endif %}
+                            @{{ profile.user.username }}
+                        </span>
+                    </p>
+
+                    {% if profile_user and profile_user.profile and profile_user.profile.is_founder_club %}
+                        <div class="mt-2 flex items-center justify-center">
+                            <span class="inline-flex items-center gap-2 rounded-full border border-yellow-500/30 bg-yellow-500/10 px-3 py-1 text-[11px] font-extrabold text-yellow-200">
+                                <span aria-hidden="true">👑</span>
+                                <span>Founder Club</span>
+                            </span>
+                        </div>
+                    {% endif %}
 
                     {% if show_presence %}
                         <div class="mt-2 flex items-center justify-center gap-2 text-xs text-gray-300" aria-label="Online status">
@@ -108,6 +126,7 @@
                                 hx-swap="innerHTML"
                                 hx-push-url="false"
                                 data-loading-text="Loading…"
+                                {% if is_following %}hx-confirm="Are you sure you want to unfollow @{{ profile_user.username }}?" data-confirm-title="Unfollow"{% endif %}
                             >
                                 {% csrf_token %}
                                 <button type="submit"

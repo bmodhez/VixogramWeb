@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto">
+  <div class="rounded-2xl border border-gray-800 bg-gray-900/60 backdrop-blur p-6 sm:p-8 shadow-2xl shadow-black/20">
+    <h1 class="text-2xl sm:text-3xl font-extrabold text-white">Terms of Service</h1>
+    <p class="mt-2 text-gray-300 leading-6">By using Vixogram, you agree to follow our rules and keep the community safe.</p>
+
+    <div class="mt-6 space-y-4 text-sm text-gray-300">
+      <div class="rounded-xl border border-gray-800 bg-gray-950/30 p-4">
+        <div class="font-semibold text-white">Be respectful</div>
+        <p class="mt-1">No harassment, hate, threats, or spam.</p>
+      </div>
+      <div class="rounded-xl border border-gray-800 bg-gray-950/30 p-4">
+        <div class="font-semibold text-white">Safety first</div>
+        <p class="mt-1">We may restrict accounts that violate guidelines to protect users.</p>
+      </div>
+      <div class="rounded-xl border border-gray-800 bg-gray-950/30 p-4">
+        <div class="font-semibold text-white">Need help?</div>
+        <p class="mt-1">Contact support for questions or concerns.</p>
+        <a class="mt-2 inline-block text-indigo-200 hover:text-indigo-100" href="{% url 'contact' %}">Contact Us</a>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -6,6 +6,7 @@ from django.contrib.auth import get_user_model
 from django.conf import settings
 from django.core.cache import cache
 from django.utils import timezone
+import datetime
 import os
 from django.db.models import Count
 from asgiref.sync import async_to_sync
@@ -1025,15 +1026,17 @@ class ChatroomConsumer(WebsocketConsumer):
         )
 
         # Retention: keep only the newest messages per room (best-effort)
-        try:
-            from a_rtchat.retention import trim_chat_group_messages
+        # Apply only to public/group chats, not private chats.
+        if not bool(getattr(self.chatroom, 'is_private', False)):
+            try:
+                from a_rtchat.retention import trim_chat_group_messages
 
-            trim_chat_group_messages(
-                chat_group_id=getattr(self.chatroom, 'id', 0),
-                keep_last=int(getattr(settings, 'CHAT_MAX_MESSAGES_PER_ROOM', 900)),
-            )
-        except Exception:
-            pass
+                trim_chat_group_messages(
+                    chat_group_id=getattr(self.chatroom, 'id', 0),
+                    keep_last=int(getattr(settings, 'CHAT_MAX_MESSAGES_PER_ROOM', 300)),
+                )
+            except Exception:
+                pass
 
         # Public chat bot (Natasha): reply occasionally, async.
         try:
@@ -1440,6 +1443,70 @@ class ChatroomConsumer(WebsocketConsumer):
         
         
 class OnlineStatusConsumer(WebsocketConsumer):
+    def _active_start_key(self) -> str:
+        return f"online_status_active_start:{getattr(self.user, 'id', 0)}"
+
+    def _set_active_start_if_missing(self) -> None:
+        key = self._active_start_key()
+        try:
+            if cache.get(key) is None:
+                cache.set(key, int(timezone.now().timestamp()), timeout=60 * 60 * 24 * 3)
+        except Exception:
+            pass
+
+    def _pop_active_start(self) -> int | None:
+        key = self._active_start_key()
+        try:
+            val = cache.get(key)
+            cache.delete(key)
+            if val is None:
+                return None
+            return int(val)
+        except Exception:
+            return None
+
+    def _add_active_seconds(self, start_ts: int, end_ts: int) -> None:
+        """Accumulate active seconds into a_users.DailyUserActivity, split by local day."""
+        try:
+            if not start_ts or not end_ts:
+                return
+            if end_ts <= start_ts:
+                return
+
+            from a_users.models import DailyUserActivity
+            from django.db.models import F
+
+            start_dt = timezone.localtime(datetime.datetime.fromtimestamp(start_ts, tz=datetime.timezone.utc))
+            end_dt = timezone.localtime(datetime.datetime.fromtimestamp(end_ts, tz=datetime.timezone.utc))
+
+            cur = start_dt
+            while cur.date() < end_dt.date():
+                next_midnight = (cur + datetime.timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+                secs = int((next_midnight - cur).total_seconds())
+                if secs > 0:
+                    DailyUserActivity.objects.update_or_create(
+                        user_id=getattr(self.user, 'id', None),
+                        date=cur.date(),
+                        defaults={},
+                    )
+                    DailyUserActivity.objects.filter(user_id=getattr(self.user, 'id', None), date=cur.date()).update(
+                        active_seconds=F('active_seconds') + secs
+                    )
+                cur = next_midnight
+
+            secs = int((end_dt - cur).total_seconds())
+            if secs > 0:
+                DailyUserActivity.objects.update_or_create(
+                    user_id=getattr(self.user, 'id', None),
+                    date=cur.date(),
+                    defaults={},
+                )
+                DailyUserActivity.objects.filter(user_id=getattr(self.user, 'id', None), date=cur.date()).update(
+                    active_seconds=F('active_seconds') + secs
+                )
+        except Exception:
+            return
+
     def _conn_key(self) -> str:
         return f"online_status_conn:{getattr(self.user, 'id', 0)}"
 
@@ -1500,6 +1567,8 @@ class OnlineStatusConsumer(WebsocketConsumer):
                     self.group.users_online.add(self.user.pk)
             except Exception:
                 pass
+            # Start activity window when the first tab connects.
+            self._set_active_start_if_missing()
             
         async_to_sync(self.channel_layer.group_add)(
             self.group_name, self.channel_name
@@ -1536,6 +1605,15 @@ class OnlineStatusConsumer(WebsocketConsumer):
                     self.group.users_online.remove(self.user.pk)
             except Exception:
                 pass
+
+            # End activity window when the last tab disconnects.
+            try:
+                start_ts = self._pop_active_start()
+                if start_ts:
+                    end_ts = int(timezone.now().timestamp())
+                    self._add_active_seconds(int(start_ts), int(end_ts))
+            except Exception:
+                pass
             
         async_to_sync(self.channel_layer.group_discard)(
             self.group_name, self.channel_name
@@ -1552,12 +1630,43 @@ class OnlineStatusConsumer(WebsocketConsumer):
         ) 
         
     def online_status_handler(self, event):
+        total_online = 0
+        try:
+            total_online = self.group.users_online.count()
+        except Exception:
+            total_online = 0
+        # Stealth mode: hide users who opted to appear offline.
+        stealth_ids = set()
+        try:
+            if not bool(getattr(self.user, 'is_staff', False)):
+                from a_users.models import Profile
+                stealth_ids = set(
+                    Profile.objects.filter(is_stealth=True).values_list('user_id', flat=True)
+                )
+        except Exception:
+            stealth_ids = set()
+
         online_users = self.group.users_online.exclude(id=self.user.id)
+        if stealth_ids:
+            online_users = online_users.exclude(id__in=stealth_ids)
+
         public_chat_users = ChatGroup.objects.get(group_name='public-chat').users_online.exclude(id=self.user.id)
+        if stealth_ids:
+            public_chat_users = public_chat_users.exclude(id__in=stealth_ids)
         
         my_chats = self.user.chat_groups.all()
-        private_chats_with_users = [chat for chat in my_chats.filter(is_private=True) if chat.users_online.exclude(id=self.user.id)]
-        group_chats_with_users = [chat for chat in my_chats.filter(groupchat_name__isnull=False) if chat.users_online.exclude(id=self.user.id)]
+
+        def _has_visible_other_online(chat) -> bool:
+            try:
+                qs = chat.users_online.exclude(id=self.user.id)
+                if stealth_ids:
+                    qs = qs.exclude(id__in=stealth_ids)
+                return qs.exists()
+            except Exception:
+                return False
+
+        private_chats_with_users = [chat for chat in my_chats.filter(is_private=True) if _has_visible_other_online(chat)]
+        group_chats_with_users = [chat for chat in my_chats.filter(groupchat_name__isnull=False) if _has_visible_other_online(chat)]
         
         if public_chat_users or private_chats_with_users or group_chats_with_users:
             online_in_chats = True
@@ -1568,6 +1677,7 @@ class OnlineStatusConsumer(WebsocketConsumer):
             'online_users': online_users,
             'online_in_chats': online_in_chats,
             'public_chat_users': public_chat_users,
+            'total_online': total_online,
             'user': self.user
         }
         html = render_to_string("a_rtchat/partials/online_status.html", context=context)

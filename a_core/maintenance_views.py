@@ -63,7 +63,17 @@ def maintenance_page_view(request: HttpRequest) -> HttpResponse:
     # Staff should never be blocked.
     if request.user.is_authenticated and getattr(request.user, "is_staff", False):
         raise Http404()
-    return render(request, "maintenance.html", status=503)
+    enabled = bool(is_maintenance_enabled())
+    # While enabled we serve a 503 page, but once disabled we return 200 so the
+    # client can show a "Maintenance Complete" screen and allow entry.
+    return render(
+        request,
+        "maintenance.html",
+        {
+            'maintenance_enabled': enabled,
+        },
+        status=503 if enabled else 200,
+    )
 
 
 @require_GET

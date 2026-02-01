@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto">
+  <div class="rounded-2xl border border-gray-800 bg-gray-900/60 backdrop-blur p-6 sm:p-8 shadow-2xl shadow-black/20">
+    <h1 class="text-2xl sm:text-3xl font-extrabold text-white">Contact Us</h1>
+    <p class="mt-2 text-gray-300 leading-6">We’re here to help. Reach out for support, feedback, or business enquiries.</p>
+
+    <div class="mt-6 grid gap-4 sm:grid-cols-2">
+      <div class="rounded-xl border border-gray-800 bg-gray-950/30 p-4">
+        <div class="text-sm font-semibold text-white">Email</div>
+        {% if CONTACT_EMAIL %}
+          <a class="mt-2 inline-block text-sm text-emerald-300 hover:text-emerald-200" href="mailto:{{ CONTACT_EMAIL }}">{{ CONTACT_EMAIL }}</a>
+        {% else %}
+          <div class="mt-2 text-sm text-gray-400">Email support will be listed here soon.</div>
+        {% endif %}
+      </div>
+      <div class="rounded-xl border border-gray-800 bg-gray-950/30 p-4">
+        <div class="text-sm font-semibold text-white">Social</div>
+        {% if CONTACT_INSTAGRAM_URL %}
+          <a class="mt-2 inline-block text-sm text-indigo-200 hover:text-indigo-100" href="{{ CONTACT_INSTAGRAM_URL }}" target="_blank" rel="noopener noreferrer">Instagram</a>
+        {% else %}
+          <div class="mt-2 text-sm text-gray-400">Social links will be listed here soon.</div>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="mt-6 text-sm text-gray-400">
+      For account-specific issues, you can also use <a class="text-indigo-200 hover:text-indigo-100" href="{% url 'account_login' %}">Login</a> and then visit <a class="text-indigo-200 hover:text-indigo-100" href="{% url 'contact-support' %}">Contact Support</a>.
+    </div>
+  </div>
+</div>
+{% endblock %}

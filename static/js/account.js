@@ -1,4 +1,54 @@
 (function () {
+    function getProgressEls() {
+        try {
+            const root = document.getElementById('vixo-auth-progress');
+            if (!root) return null;
+            return {
+                root,
+                bar: document.getElementById('vixo-auth-progress-bar'),
+                pill: document.getElementById('vixo-auth-progress-pill'),
+                text: document.getElementById('vixo-auth-progress-text'),
+            };
+        } catch {
+            return null;
+        }
+    }
+
+    let progressRunning = false;
+    function showAuthProgress() {
+        if (progressRunning) return;
+        if (!isAuthPage()) return;
+        const els = getProgressEls();
+        if (!els || !els.root || !els.bar) return;
+
+        progressRunning = true;
+        try { els.bar.style.width = '0%'; } catch {}
+        try { if (els.text) els.text.textContent = '0%'; } catch {}
+        try { els.root.classList.remove('hidden'); } catch {}
+        try { if (els.pill) els.pill.classList.remove('hidden'); } catch {}
+
+        let start = null;
+        const durationMs = 950; // feels like a "0→100" loader
+
+        const tick = (ts) => {
+            if (!start) start = ts;
+            const t = Math.min(1, (ts - start) / durationMs);
+
+            // Ease-out so it slows near the end.
+            const eased = 1 - Math.pow(1 - t, 2.2);
+            const pct = Math.max(0, Math.min(100, Math.round(eased * 100)));
+
+            try { els.bar.style.width = pct + '%'; } catch {}
+            try { if (els.text) els.text.textContent = pct + '%'; } catch {}
+
+            if (t < 1) {
+                requestAnimationFrame(tick);
+            }
+        };
+
+        try { requestAnimationFrame(tick); } catch {}
+    }
+
     function isAuthPage() {
         try {
             return document.body && document.body.classList.contains('vixo-auth-page');
@@ -65,6 +115,9 @@
             if (!shouldHandleLinkClick(e, a)) return;
 
             e.preventDefault();
+
+            // Only show loader when user is actually navigating via these links.
+            showAuthProgress();
             try {
                 document.body.classList.add('vixo-page-leave');
             } catch {
@@ -74,6 +127,56 @@
             window.setTimeout(function () {
                 window.location.href = href;
             }, 170);
+        }, true);
+
+        // Show loader on actual submit (login/signup).
+        document.addEventListener('submit', function (e) {
+            if (!isAuthPage()) return;
+            const form = e.target;
+            if (!form || form.tagName !== 'FORM') return;
+
+            // Only for account forms (avoid interfering with other pages using vixo-auth-page).
+            const action = (form.getAttribute('action') || '').toLowerCase();
+            if (action && !action.includes('/accounts/')) return;
+
+            // If we've already delayed once, allow the submit to proceed.
+            if (form.dataset && form.dataset.vixoSubmitDelayed === '1') return;
+
+            // If another handler (e.g., reCAPTCHA v3) prevents default, don't start progress yet.
+            if (e.defaultPrevented) return;
+            showAuthProgress();
+
+            // Give the browser a moment to paint the loader before navigation.
+            // Without this, fast POSTs can navigate away before any visual change appears.
+            try {
+                e.preventDefault();
+                if (form.dataset) form.dataset.vixoSubmitDelayed = '1';
+                window.setTimeout(function () {
+                    try {
+                        if (typeof form.requestSubmit === 'function') {
+                            form.requestSubmit();
+                        } else {
+                            form.submit();
+                        }
+                    } catch {
+                        try { form.submit(); } catch {}
+                    }
+                }, 120);
+            } catch {
+                // ignore
+            }
+        }, true);
+
+        // Start loader as early as possible (click on submit button).
+        document.addEventListener('click', function (e) {
+            if (!isAuthPage()) return;
+            const btn = e.target && e.target.closest ? e.target.closest('button[type="submit"], input[type="submit"]') : null;
+            if (!btn) return;
+            const form = btn.form;
+            if (!form) return;
+            const action = (form.getAttribute('action') || '').toLowerCase();
+            if (action && !action.includes('/accounts/')) return;
+            showAuthProgress();
         }, true);
     }
 

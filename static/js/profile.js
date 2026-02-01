@@ -1,3 +1,5 @@
+// Realtime presence + follow-list modal.
+// This file can be used on a full profile page and inside the HTMX profile modal.
 (function () {
     function readJsonScript(id) {
         try {
@@ -11,9 +13,31 @@
         }
     }
 
-    const cfg = (window.__vixo_profile_config || readJsonScript('vixo-profile-config') || {});
-    const profileUsername = String(cfg.profileUsername || '');
-    const isOwner = !!cfg.isOwner;
+    function getCfg() {
+        return (window.__vixo_profile_config || readJsonScript('vixo-profile-config') || {});
+    }
+
+    let presenceSocket = null;
+    let presenceSocketUrl = '';
+    let presenceReconnectTimer = null;
+
+    function clearPresenceTimers() {
+        try { if (presenceReconnectTimer) clearTimeout(presenceReconnectTimer); } catch {}
+        presenceReconnectTimer = null;
+    }
+
+    function closePresenceSocket() {
+        clearPresenceTimers();
+        try {
+            if (presenceSocket) {
+                presenceSocket.onclose = null;
+                presenceSocket.onmessage = null;
+                presenceSocket.close();
+            }
+        } catch {}
+        presenceSocket = null;
+        presenceSocketUrl = '';
+    }
 
     function setPresenceUi(online) {
         const dot = document.getElementById('presence_dot');
@@ -24,33 +48,47 @@
         text.textContent = online ? 'Online' : 'Offline';
     }
 
-    function initPresence() {
-        // Template hides presence for bots; if elements don't exist, do nothing.
+    function initPresence(cfg) {
         const dot = document.getElementById('presence_dot');
         const text = document.getElementById('presence_text');
-        if (!dot || !text) return;
+        if (!dot || !text) {
+            // Presence UI not on this page/modal.
+            closePresenceSocket();
+            return;
+        }
 
-        // Set initial state from server config (already respects stealth for non-owners).
         if (typeof cfg.presenceOnline === 'boolean') {
             setPresenceUi(cfg.presenceOnline);
         }
 
-        // Don't open the socket if backend told us not to (stealth or bots).
-        if (!cfg.presenceWsEnabled) return;
-        if (!profileUsername) return;
+        const profileUsername = String(cfg.profileUsername || '');
+        if (!cfg.presenceWsEnabled || !profileUsername) {
+            closePresenceSocket();
+            return;
+        }
 
         const wsScheme = (window.location.protocol === 'https:') ? 'wss' : 'ws';
         const wsUrl = `${wsScheme}://${window.location.host}/ws/presence/${encodeURIComponent(profileUsername)}/`;
 
-        let socket;
+        // Already connected to the right target.
+        if (presenceSocket && presenceSocketUrl === wsUrl && presenceSocket.readyState === WebSocket.OPEN) {
+            return;
+        }
+
+        // Switch target (or reconnect).
+        closePresenceSocket();
+        presenceSocketUrl = wsUrl;
+
         const connect = () => {
+            clearPresenceTimers();
             try {
-                socket = new WebSocket(wsUrl);
+                presenceSocket = new WebSocket(wsUrl);
             } catch {
+                presenceSocket = null;
                 return;
             }
 
-            socket.onmessage = (event) => {
+            presenceSocket.onmessage = (event) => {
                 let payload;
                 try { payload = JSON.parse(event.data); } catch { return; }
                 if (payload && payload.type === 'presence') {
@@ -58,19 +96,19 @@
                 }
             };
 
-            socket.onclose = () => {
-                // Basic reconnect (only while tab is open)
+            presenceSocket.onclose = () => {
+                // Basic reconnect (only while tab is visible)
                 try {
                     if (document.visibilityState === 'hidden') return;
                 } catch {}
-                setTimeout(connect, 1200);
+                presenceReconnectTimer = setTimeout(connect, 1200);
             };
         };
 
         connect();
     }
 
-    function initFollowListModal() {
+    function initFollowListModal(cfg) {
         const modal = document.getElementById('follow_modal');
         const titleEl = document.getElementById('follow_modal_title');
         const closeBtn = document.getElementById('follow_modal_close');
@@ -78,6 +116,9 @@
         const followersEl = document.getElementById('followers_count_value');
         const followingEl = document.getElementById('following_count_value');
         if (!modal || !titleEl || !closeBtn || !bodyEl) return;
+
+        const profileUsername = String((cfg && cfg.profileUsername) || '');
+        const isOwner = !!(cfg && cfg.isOwner);
 
         const open = ({ kind, url }) => {
             modal.dataset.kind = kind;
@@ -145,7 +186,8 @@
                 if (followingEl && typeof detail.following_count === 'number') followingEl.textContent = String(detail.following_count);
 
                 if (modal.classList.contains('hidden')) return;
-                if ((modal.dataset.kind || '') !== 'following') return;
+                const kind = (modal.dataset.kind || '');
+                if (kind !== 'following' && kind !== 'followers') return;
                 const baseUrl = modal.dataset.baseUrl || '';
                 if (!baseUrl) return;
 
@@ -158,6 +200,37 @@
         });
     }
 
-    initFollowListModal();
-    initPresence();
+    let followModalInitDone = false;
+    function initFollowListModalOnce(cfg) {
+        if (followModalInitDone) return;
+        // Only relevant for full profile page (modal fragment doesn't include follow list modal).
+        const modal = document.getElementById('follow_modal');
+        if (!modal) return;
+        followModalInitDone = true;
+        initFollowListModal(cfg);
+    }
+
+    function initAll() {
+        const cfg = getCfg();
+        initFollowListModalOnce(cfg);
+        initPresence(cfg);
+    }
+
+    // Initial page load.
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initAll);
+    } else {
+        initAll();
+    }
+
+    // HTMX modal swaps (profile modal opens inside #global_modal_root).
+    // Use `document` (not `document.body`) so this works even if the script loads in <head>.
+    document.addEventListener('htmx:afterSwap', (e) => {
+        try {
+            const target = e && e.detail && e.detail.target;
+            if (!target) return;
+            if (target.id !== 'global_modal_root') return;
+            initAll();
+        } catch {}
+    });
 })();

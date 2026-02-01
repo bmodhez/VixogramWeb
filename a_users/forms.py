@@ -1,4 +1,9 @@
+from datetime import timedelta
+
 from django import forms
+from django.contrib.auth.models import User
+from django.utils import timezone
+from django.conf import settings
 from .models import Profile
 from .models import UserReport
 from .models import SupportEnquiry
@@ -118,6 +123,73 @@ class ProfilePrivacyForm(forms.ModelForm):
                 'class': 'sr-only peer',
             }),
         }
+
+
+class UsernameChangeForm(forms.Form):
+    username = forms.CharField(
+        max_length=30,
+        required=True,
+        widget=forms.TextInput(
+            attrs={
+                'placeholder': 'New username',
+                'class': 'w-full bg-gray-700 text-white border border-gray-600 rounded-lg px-4 pr-10 py-3 outline-none focus:border-emerald-500',
+                'autocomplete': 'off',
+                'autocapitalize': 'none',
+                'spellcheck': 'false',
+            }
+        ),
+    )
+
+    USERNAME_RE = re.compile(r'^[a-zA-Z0-9_\.]{3,30}$')
+
+    def __init__(self, *args, user=None, profile=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.user = user
+        self.profile = profile
+
+    @staticmethod
+    def _cooldown_days() -> int:
+        try:
+            return int(getattr(settings, 'USERNAME_CHANGE_COOLDOWN_DAYS', 21))
+        except Exception:
+            return 21
+
+    def can_change_now(self) -> tuple[bool, timezone.datetime | None]:
+        """Return (can_change, next_available_at)."""
+        profile = self.profile
+        if not profile:
+            return False, None
+
+        # First change after registration is allowed anytime.
+        if int(getattr(profile, 'username_change_count', 0) or 0) <= 0:
+            return True, None
+
+        last = getattr(profile, 'username_last_changed_at', None)
+        if not last:
+            return True, None
+
+        next_at = last + timedelta(days=self._cooldown_days())
+        now = timezone.now()
+        return (now >= next_at), next_at
+
+    def clean_username(self):
+        username = (self.cleaned_data.get('username') or '').strip()
+        username = username.replace(' ', '')
+
+        if not username:
+            raise forms.ValidationError('Username is required.')
+
+        if not self.USERNAME_RE.match(username):
+            raise forms.ValidationError('Use 3-30 chars: letters, numbers, underscore, dot.')
+
+        if self.user and getattr(self.user, 'username', '') and username == self.user.username:
+            raise forms.ValidationError('That is already your username.')
+
+        # Avoid duplicates (case-insensitive).
+        if User.objects.filter(username__iexact=username).exists():
+            raise forms.ValidationError('This username is already taken.')
+
+        return username
 
 
 class SupportEnquiryForm(forms.ModelForm):

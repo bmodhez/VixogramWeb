@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 
 from allauth.account.adapter import DefaultAccountAdapter
 from allauth.account import adapter as allauth_adapter_module
@@ -20,6 +21,24 @@ class CustomAccountAdapter(DefaultAccountAdapter):
         return username
 
     def send_mail(self, template_prefix: str, email: str, context: dict) -> None:
+        # On slow networks/SMTP, sending verification mail can block the signup POST
+        # long enough that users click twice (first request succeeds, second shows
+        # "already exists"). Allow async email sending to keep the UX snappy.
+        if bool(getattr(settings, 'ALLAUTH_ASYNC_EMAIL', False)):
+            def _bg_send():
+                try:
+                    DefaultAccountAdapter.send_mail(self, template_prefix, email, context)
+                except Exception:
+                    logger.exception("Failed to send allauth email (async) '%s' to %s", template_prefix, email)
+
+            try:
+                t = threading.Thread(target=_bg_send, name='allauth-send-mail', daemon=True)
+                t.start()
+                return None
+            except Exception:
+                # Fallback to sync send.
+                pass
+
         try:
             return super().send_mail(template_prefix, email, context)
         except Exception:

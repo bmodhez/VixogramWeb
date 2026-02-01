@@ -49,18 +49,85 @@
         </div>
     </div>
 
+    <!-- Maintenance complete modal (shown when maintenance flips OFF) -->
+    <div id="vixo-maintenance-complete" class="fixed inset-0 z-[9999] hidden items-center justify-center px-4 py-8">
+        <div class="absolute inset-0 bg-black/70 backdrop-blur-sm"></div>
+        <div class="relative w-full max-w-2xl">
+            <div class="relative overflow-hidden rounded-3xl border border-white/10 bg-gray-900/70 backdrop-blur shadow-2xl">
+                <div class="absolute inset-0 bg-gradient-to-br from-purple-600/25 via-indigo-600/10 to-sky-600/25"></div>
+
+                <div class="relative p-7 sm:p-9">
+                    <div class="flex items-start justify-between gap-4">
+                        <div>
+                            <div class="text-2xl sm:text-3xl font-extrabold">🛠️ Maintenance Complete!</div>
+                            <div class="mt-3 text-sm text-gray-200 leading-relaxed">
+                                Hey! Vixogram is live again 🚀
+                            </div>
+                            <div class="mt-2 text-sm text-gray-300 leading-relaxed">
+                                Thank you for waiting while we improved things for you.
+                            </div>
+                            <div class="mt-2 text-sm text-gray-300 leading-relaxed">
+                                Let's get back to chatting 💬💙
+                            </div>
+
+                            <div class="mt-6">
+                                <a
+                                    href="/"
+                                    class="inline-flex items-center justify-center rounded-xl bg-indigo-500/90 hover:bg-indigo-500 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-indigo-500/20 transition"
+                                >
+                                    Enter Vixogram
+                                </a>
+                            </div>
+                        </div>
+
+                        <div class="hidden sm:block shrink-0">
+                            <div class="h-40 w-40 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center text-6xl">
+                                🐻
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script>
         (function () {
             // When maintenance is turned OFF, automatically redirect users back.
             const statusUrl = '/api/site/maintenance/status/';
             const backUrl = '/';
+            const modal = document.getElementById('vixo-maintenance-complete');
+            const initialEnabled = (function(){
+                try {
+                    const v = '{{ maintenance_enabled|default:"True" }}';
+                    return String(v).toLowerCase() === 'true';
+                } catch {
+                    return true;
+                }
+            })();
+
+            function showComplete() {
+                try {
+                    if (!modal) { window.location.href = backUrl; return; }
+                    modal.classList.remove('hidden');
+                    modal.classList.add('flex');
+                } catch {
+                    window.location.href = backUrl;
+                }
+            }
+
+            // If server already says maintenance is off, show immediately.
+            if (initialEnabled === false) {
+                showComplete();
+                return;
+            }
 
             async function poll() {
                 try {
                     const r = await fetch(statusUrl, { cache: 'no-store', credentials: 'same-origin' });
                     const j = await r.json();
                     if (j && j.enabled === false) {
-                        window.location.href = backUrl;
+                        showComplete();
                         return;
                     }
                 } catch {

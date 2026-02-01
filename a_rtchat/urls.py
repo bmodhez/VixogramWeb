@@ -7,6 +7,7 @@ urlpatterns = [
     path('chat/room/<chatroom_name>', chat_view, name="chatroom"),
     path('chat/config/<chatroom_name>', chat_config_view, name='chat-config'),
     path('chat/poll/<chatroom_name>', chat_poll_view, name="chat-poll"),
+    path('chat/older/<chatroom_name>', chat_older_view, name="chat-older"),
     path('chat/mentions/', mention_user_search, name='mention-search'),
     path('chat/push/register/', push_register, name='push-register'),
     path('chat/push/config/', push_config, name='push-config'),
@@ -37,7 +38,9 @@ urlpatterns = [
 
     # Staff tools
     path('chat/admin/users/', admin_users_view, name='admin-users'),
+    path('chat/admin/users/export/', admin_users_export_view, name='admin-users-export'),
     path('chat/admin/users/<int:user_id>/toggle-block/', admin_toggle_user_block_view, name='admin-user-toggle-block'),
+    path('chat/admin/beta/', admin_beta_features_view, name='admin-beta-features'),
     path('chat/admin/moderation/', moderation_logs_view, name='moderation-logs'),
     path('chat/admin/reports/', admin_reports_view, name='admin-reports'),
     path('chat/admin/reports/<int:report_id>/status/', admin_report_update_status_view, name='admin-report-status'),

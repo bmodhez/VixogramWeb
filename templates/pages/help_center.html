@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto">
+  <div class="rounded-2xl border border-gray-800 bg-gray-900/60 backdrop-blur p-6 sm:p-8 shadow-2xl shadow-black/20">
+    <h1 class="text-2xl sm:text-3xl font-extrabold text-white">Help Center</h1>
+    <p class="mt-2 text-gray-300 leading-6">Quick answers for common questions. More help articles coming soon.</p>
+
+    <div class="mt-6 space-y-4">
+      <div class="rounded-xl border border-gray-800 bg-gray-950/30 p-4">
+        <div class="text-sm font-semibold text-white">Forgot password?</div>
+        <p class="mt-1 text-sm text-gray-300">Use the password reset flow from the login page.</p>
+        <a class="mt-2 inline-block text-sm text-indigo-200 hover:text-indigo-100" href="{% url 'account_reset_password' %}">Reset password</a>
+      </div>
+
+      <div class="rounded-xl border border-gray-800 bg-gray-950/30 p-4">
+        <div class="text-sm font-semibold text-white">Need to report someone?</div>
+        <p class="mt-1 text-sm text-gray-300">Please report abusive/spam behaviour so we can take action.</p>
+        <a class="mt-2 inline-block text-sm text-indigo-200 hover:text-indigo-100" href="{% url 'report-abuse' %}">Report Abuse</a>
+      </div>
+
+      <div class="rounded-xl border border-gray-800 bg-gray-950/30 p-4">
+        <div class="text-sm font-semibold text-white">Still stuck?</div>
+        <p class="mt-1 text-sm text-gray-300">Contact us and we’ll get back as soon as possible.</p>
+        <a class="mt-2 inline-block text-sm text-indigo-200 hover:text-indigo-100" href="{% url 'contact' %}">Contact Us</a>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

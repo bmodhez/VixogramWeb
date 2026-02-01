@@ -17,6 +17,17 @@ class Profile(models.Model):
     is_bot = models.BooleanField(default=False)
     is_dnd = models.BooleanField(default=False)
     referral_points = models.PositiveIntegerField(default=0)
+
+    # Founder Club (invite rewards)
+    is_founder_club = models.BooleanField(default=False)
+    founder_club_granted_at = models.DateTimeField(null=True, blank=True)
+    founder_club_revoked_at = models.DateTimeField(null=True, blank=True)
+    founder_club_reapply_available_at = models.DateTimeField(null=True, blank=True)
+    founder_club_last_checked = models.DateField(null=True, blank=True)
+
+    # Username change limits
+    username_change_count = models.PositiveIntegerField(default=0)
+    username_last_changed_at = models.DateTimeField(null=True, blank=True)
     
     def __str__(self):
         return str(self.user)
@@ -210,3 +221,62 @@ class Referral(models.Model):
 
     def __str__(self):
         return f"Referral({self.id}) referrer={self.referrer_id} referred={self.referred_id} awarded={bool(self.awarded_at)}"
+
+
+class DailyUserActivity(models.Model):
+    """Per-user daily activity time (seconds).
+
+    Used for enforcing Founder Club minimum daily activity.
+    """
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='daily_activity')
+    date = models.DateField(db_index=True)
+    active_seconds = models.PositiveIntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['user', 'date'], name='uniq_daily_user_activity_user_date'),
+        ]
+        indexes = [
+            models.Index(fields=['user', '-date'], name='dua_user_date_idx'),
+        ]
+
+    def __str__(self):
+        return f"DailyUserActivity(u={self.user_id} date={self.date} sec={self.active_seconds})"
+
+
+class BetaFeature(models.Model):
+    """Feature flags for beta rollout.
+
+    Admin can "push to beta" by enabling a feature.
+    The UI can show the feature to everyone, but usage can be restricted
+    (typically to Founder Club).
+    """
+
+    slug = models.SlugField(unique=True)
+    title = models.CharField(max_length=120)
+    description = models.TextField(blank=True, default='')
+    is_enabled = models.BooleanField(default=False, db_index=True)
+    requires_founder_club = models.BooleanField(default=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['slug']
+
+    def __str__(self):
+        return f"BetaFeature({self.slug}) enabled={self.is_enabled} founder_only={self.requires_founder_club}"
+
+    def is_accessible_by(self, user: User | None) -> bool:
+        if not self.is_enabled:
+            return False
+        if not self.requires_founder_club:
+            return True
+        if not user or not getattr(user, 'is_authenticated', False):
+            return False
+        try:
+            return bool(getattr(getattr(user, 'profile', None), 'is_founder_club', False))
+        except Exception:
+            return False

@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto">
+  <div class="rounded-2xl border border-gray-800 bg-gray-900/60 backdrop-blur p-6 sm:p-8 shadow-2xl shadow-black/20">
+    <h1 class="text-2xl sm:text-3xl font-extrabold text-white">Community Guidelines</h1>
+    <p class="mt-2 text-gray-300 leading-6">Let’s keep the chat friendly, positive, and spam-free.</p>
+
+    <div class="mt-6 grid gap-4">
+      <div class="rounded-xl border border-gray-800 bg-gray-950/30 p-4">
+        <div class="text-sm font-semibold text-white">Be respectful</div>
+        <p class="mt-1 text-sm text-gray-300">No harassment, hate, threats, or bullying.</p>
+      </div>
+      <div class="rounded-xl border border-gray-800 bg-gray-950/30 p-4">
+        <div class="text-sm font-semibold text-white">No spam or scams</div>
+        <p class="mt-1 text-sm text-gray-300">Don’t send unsolicited ads, phishing links, or suspicious URLs.</p>
+      </div>
+      <div class="rounded-xl border border-gray-800 bg-gray-950/30 p-4">
+        <div class="text-sm font-semibold text-white">Protect privacy</div>
+        <p class="mt-1 text-sm text-gray-300">Don’t share personal or sensitive info. Respect others’ privacy too.</p>
+      </div>
+      <div class="rounded-xl border border-gray-800 bg-gray-950/30 p-4">
+        <div class="text-sm font-semibold text-white">Report problems</div>
+        <p class="mt-1 text-sm text-gray-300">If you see abuse or unsafe behaviour, please report it.</p>
+        <a class="mt-2 inline-block text-sm text-indigo-200 hover:text-indigo-100" href="{% url 'report-abuse' %}">Report Abuse</a>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

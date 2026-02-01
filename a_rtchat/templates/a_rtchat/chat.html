@@ -272,8 +272,6 @@
                     </div>
                 {% endif %}
                 {% endif %}
-                <span id="online-count" class="pr-1 font-bold">{{ chat_group.users_online.count }}</span> online
-
                 {% if chat_group.is_code_room %}
                     <span class="ml-3 text-xs text-gray-100 min-w-0 truncate inline-flex items-center gap-1" data-private-room-title-wrap>
                         <span class="text-gray-300">Room:</span>
@@ -341,7 +339,7 @@
         </div>
 
         {% if chat_group.is_private %}
-            <div class="px-4 py-1.5 text-[11px] text-gray-300/90 flex items-center justify-center gap-1 flex-wrap">
+            <div class="relative px-4 py-1.5 text-[11px] text-gray-300/90 flex items-center justify-center gap-1 flex-wrap">
                 <span aria-hidden="true">🔒</span>
                 <span class="hidden sm:inline">End-to-End encrypted</span>
                 <span class="sm:hidden">Encrypted</span>
@@ -402,6 +400,17 @@
                         <div class="shrink-0 text-[11px] font-semibold bg-emerald-500/10 border border-emerald-500/20 px-2 py-1 rounded-full" id="challenge_banner_time"></div>
                     </div>
                 </div>
+            </div>
+            <div id="chat_load_older_wrap" class="flex justify-center mb-3" {% if not has_older_messages %}style="display:none"{% endif %}>
+                <button
+                    type="button"
+                    id="chat_load_older"
+                    class="inline-flex items-center gap-2 rounded-full border border-gray-800 bg-gray-900/60 px-4 py-2 text-xs font-semibold text-gray-200 hover:bg-gray-800/60 transition"
+                    aria-label="Load older messages"
+                >
+                    <span aria-hidden="true">↑</span>
+                    <span>Load older</span>
+                </button>
             </div>
             {% if chat_messages %}
                 <ul id='chat_messages' data-chat-feed class="flex flex-col justify-end gap-2">
@@ -603,7 +612,14 @@
                                 aria-label="Send"
                                 title="Send"
                             >
-                                <span class="sr-only">Send</span>
+                                <span id="chat_send_text" class="sr-only">Send</span>
+
+                                <span id="chat_upload_spinner" class="hidden" aria-hidden="true">
+                                    <svg class="h-5 w-5 animate-spin" viewBox="0 0 24 24" fill="none">
+                                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3"></circle>
+                                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 0 1 8-8v3a5 5 0 0 0-5 5H4z"></path>
+                                    </svg>
+                                </span>
                                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-5 w-5">
                                     <path d="M22 2 11 13" />
                                     <path d="M22 2 15 22 11 13 2 9 22 2" />
@@ -614,6 +630,16 @@
 
                     <div id="chat_send_cooldown_notice" class="hidden text-xs text-amber-300">
                         Cooldown: <span id="chat_send_cooldown_seconds" class="font-semibold">0</span>s
+                    </div>
+
+                    <div id="chat_upload_progress" class="hidden mt-2 rounded-xl border border-gray-800 bg-gray-900/60 px-3 py-2">
+                        <div class="flex items-center justify-between gap-3 text-[11px] text-gray-300">
+                            <div id="chat_upload_status" class="min-w-0 truncate">Uploading…</div>
+                            <div id="chat_upload_percent" class="font-semibold text-emerald-300">0%</div>
+                        </div>
+                        <div class="mt-2 h-1.5 rounded-full bg-gray-800/70 overflow-hidden">
+                            <div id="chat_upload_bar" class="h-full w-0 bg-emerald-500 transition-[width] duration-100 ease-linear"></div>
+                        </div>
                     </div>
 
                     {% if uploads_allowed %}
@@ -648,9 +674,10 @@
                 translate-y-8 sm:translate-y-2 sm:scale-95 opacity-0">
 
             <div class="flex-shrink-0 flex items-center justify-between gap-3 p-4 border-b border-gray-800/50">
-                <div>
+                <div class="min-w-0">
                     <div class="text-base font-semibold text-emerald-200">Start a Challenge</div>
                     <div class="mt-0.5 text-[11px] text-gray-400">30 seconds, realtime judging</div>
+                </div>
                 </div>
                 <button type="button" id="challenge_drawer_close"
                         class="h-8 w-8 rounded-lg bg-gray-800/60 hover:bg-gray-800 text-gray-300 hover:text-gray-100 flex items-center justify-center transition-colors flex-shrink-0"
@@ -1267,7 +1294,6 @@ LEGACY INLINE SCRIPT REMOVED (moved to static/js/chat.js)
         const input = document.getElementById('id_body');
         const typedMsInput = document.getElementById('typed_ms');
         const messagesEl = document.getElementById('chat_messages');
-        const onlineCountEl = document.getElementById('online-count');
 
         const replyBar = document.getElementById('reply_bar');
         const replyBarAuthor = document.getElementById('reply_bar_author');
@@ -1596,10 +1622,6 @@ LEGACY INLINE SCRIPT REMOVED (moved to static/js/chat.js)
                     return;
                 }
 
-                if (payload.type === 'online_count' && typeof payload.online_count !== 'undefined') {
-                    if (onlineCountEl) onlineCountEl.textContent = payload.online_count;
-                }
-
                 if (payload.type === 'call_invite') {
                     if (!window.__hasGlobalCallInvite) {
                         showIncomingCall(payload);
@@ -1807,6 +1829,9 @@ LEGACY INLINE SCRIPT REMOVED (moved to static/js/chat.js)
 
             if (editBtn) {
                 const body = editBtn.dataset.messageBody || '';
+                if ((body || '').trim().startsWith('[GIF]')) {
+                    return;
+                }
                 startEditingMessage(messageId, body);
                 return;
             }
@@ -2221,7 +2246,7 @@ LEGACY INLINE SCRIPT REMOVED (moved to static/js/chat.js)
                 if (!res.ok) return;
                 const data = await res.json();
                 if (data && typeof data.online_count !== 'undefined') {
-                    if (onlineCountEl) onlineCountEl.textContent = data.online_count;
+                    __setOnlineCount(data.online_count);
                 }
                 if (data && data.messages_html) {
                     const emptyEl = document.getElementById('empty_state');

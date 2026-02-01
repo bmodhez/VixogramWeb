@@ -52,7 +52,7 @@ For UX: click '+' opens the emoji bar.
                         Info
                     </button>
                 {% endif %}
-                {% if message.author == user and message.body and message.body|slice:":6" != "[CALL]" and not message.file %}
+                {% if message.author == user and message.body and message.body|slice:":6" != "[CALL]" and message.body|slice:":5" != "[GIF]" and not message.file %}
                     <button type="button"
                         data-edit-message
                         data-message-id="{{ message.id }}"

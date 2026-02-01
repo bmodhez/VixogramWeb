@@ -128,12 +128,11 @@ SECRET_KEY = os.environ.get(
     "django-insecure-change-me-in-env",
 )
 
-# Local/dev should be DEBUG=True so uploads and static/media are easy to debug.
-# Production must be DEBUG=False.
-if ENVIRONMENT != "production":
-    DEBUG = True
-else:
-    DEBUG = _env_bool("DEBUG", default=False)
+# DEBUG:
+# - In production, default is False.
+# - In dev, default is True, but allow overriding via env var (so you can test
+#   proper 404/500 pages, email flows, etc.).
+DEBUG = _env_bool("DEBUG", default=(ENVIRONMENT != "production"))
 
 _cloud_name = os.environ.get('CLOUD_NAME')
 _cloud_key = os.environ.get('API_KEY')
@@ -277,7 +276,7 @@ INSTALLED_APPS = [
     'allauth.socialaccount',
     'django_htmx',
     'a_home',
-    'a_users',
+    'a_users.apps.AUsersConfig',
     'a_rtchat',
 ]
 
@@ -315,6 +314,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'a_core.middleware.MaintenanceModeMiddleware',
     'a_users.middleware.ActiveUserRequiredMiddleware',
+    'a_users.middleware.FounderClubEnforcementMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'a_core.middleware.RateLimitMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
@@ -349,6 +349,7 @@ TEMPLATES = [
                 'a_core.context_processors.site_contact',
                 'a_core.context_processors.recaptcha_config',
                 'a_core.context_processors.welcome_popup',
+                'a_core.context_processors.site_stats',
                 'a_users.context_processors.notifications_badge',
                 'a_rtchat.context_processors.admin_reports_badge',
                 'a_rtchat.context_processors.mobile_ads_config',
@@ -521,7 +522,26 @@ CHAT_MSG_RATE_PERIOD = int(os.environ.get('CHAT_MSG_RATE_PERIOD', '10'))
 
 # Chat message retention (per room)
 # Keep only the newest N messages per room; older messages are deleted.
-CHAT_MAX_MESSAGES_PER_ROOM = int(os.environ.get('CHAT_MAX_MESSAGES_PER_ROOM', '900'))
+CHAT_MAX_MESSAGES_PER_ROOM = int(os.environ.get('CHAT_MAX_MESSAGES_PER_ROOM', '250'))
+
+# Chat UI performance
+# Initial messages rendered into the DOM on room open. Keep this small to prevent
+# low-end devices from freezing when rooms have large histories.
+CHAT_INITIAL_MESSAGES = int(os.environ.get('CHAT_INITIAL_MESSAGES', '40'))
+# Page size when the user taps "Load older".
+CHAT_HISTORY_PAGE_SIZE = int(os.environ.get('CHAT_HISTORY_PAGE_SIZE', '35'))
+
+# Invite points
+# Points are awarded after the referred user verifies email (see a_users.signals).
+# Default tuned so 35 verified invites ~ 450 points.
+REFERRAL_POINTS_PER_INVITE = int(os.environ.get('REFERRAL_POINTS_PER_INVITE', '13'))
+
+# Founder Club (invite rewards)
+FOUNDER_CLUB_REQUIRED_POINTS = int(os.environ.get('FOUNDER_CLUB_REQUIRED_POINTS', '450'))
+FOUNDER_CLUB_REQUIRED_INVITES = int(os.environ.get('FOUNDER_CLUB_REQUIRED_INVITES', '35'))
+FOUNDER_CLUB_MIN_ACCOUNT_AGE_DAYS = int(os.environ.get('FOUNDER_CLUB_MIN_ACCOUNT_AGE_DAYS', '20'))
+FOUNDER_CLUB_MIN_ACTIVE_SECONDS_PER_DAY = int(os.environ.get('FOUNDER_CLUB_MIN_ACTIVE_SECONDS_PER_DAY', '3600'))
+FOUNDER_CLUB_REAPPLY_COOLDOWN_DAYS = int(os.environ.get('FOUNDER_CLUB_REAPPLY_COOLDOWN_DAYS', '20'))
 
 # Chat burst protection (fast spam): if a user sends too many messages in a very short window,
 # apply a short cooldown (uses the same cache backend as other rate limits).
@@ -694,7 +714,12 @@ ACCOUNT_DEFAULT_HTTP_PROTOCOL = 'https' if (ENVIRONMENT == 'production' or _usin
 # Allauth adapter override:
 # - Prevents SMTP/network errors from crashing signup/password-reset views.
 ACCOUNT_ADAPTER = 'a_users.allauth_adapter.CustomAccountAdapter'
-ALLAUTH_FAIL_EMAIL_SILENTLY = _env_bool('ALLAUTH_FAIL_EMAIL_SILENTLY', default=IS_RENDER)
+ALLAUTH_FAIL_EMAIL_SILENTLY = _env_bool('ALLAUTH_FAIL_EMAIL_SILENTLY', default=(ENVIRONMENT == 'production'))
+
+# If True, send allauth emails (verification, password reset) in the background
+# so signup/login responses are not blocked by slow SMTP.
+# Note: if SMTP is misconfigured, users may not receive emails; check logs.
+ALLAUTH_ASYNC_EMAIL = _env_bool('ALLAUTH_ASYNC_EMAIL', default=(ENVIRONMENT == 'production'))
 
 # Allauth: use custom styled forms (Tailwind classes)
 ACCOUNT_FORMS = {

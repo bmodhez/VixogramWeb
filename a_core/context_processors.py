@@ -1,6 +1,8 @@
 import json
 
 from django.conf import settings
+from django.contrib.auth import get_user_model
+from django.core.cache import cache
 
 
 def firebase_config(request):
@@ -76,3 +78,17 @@ def welcome_popup(request):
         return {'SHOW_WELCOME_POPUP': show}
     except Exception:
         return {'SHOW_WELCOME_POPUP': False}
+
+
+def site_stats(request):
+    """Expose lightweight site-wide stats to templates (cached)."""
+    try:
+        cache_key = 'vixo:total_users_count'
+        cached = cache.get(cache_key)
+        if cached is None:
+            User = get_user_model()
+            cached = int(User.objects.filter(is_active=True).count())
+            cache.set(cache_key, cached, timeout=300)
+        return {'TOTAL_USERS_COUNT': int(cached)}
+    except Exception:
+        return {'TOTAL_USERS_COUNT': 0}

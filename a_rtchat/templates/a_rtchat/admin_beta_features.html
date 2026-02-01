@@ -1,0 +1,106 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="w-full max-w-4xl mx-auto space-y-6">
+    <div class="flex items-start justify-between gap-4">
+        <div>
+            <h1 class="text-2xl font-extrabold text-white">Beta Features</h1>
+            <p class="mt-1 text-sm text-gray-400">
+                "Push to beta" by enabling a feature. It will be visible in UI to everyone,
+                but can be restricted to Founder Club users.
+            </p>
+        </div>
+        <a href="{% url 'admin-users' %}" class="shrink-0 bg-gray-700 hover:bg-gray-600 text-white rounded-lg px-4 py-2 transition-colors text-sm">Back</a>
+    </div>
+
+    <div class="rounded-2xl border border-gray-800 bg-gray-900/50 p-4">
+        <div class="text-sm font-semibold text-gray-200">Create feature</div>
+        <form method="post" class="mt-3 grid gap-3 sm:grid-cols-2">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="create" />
+
+            <label class="block">
+                <div class="text-xs text-gray-400 mb-1">Slug (unique)</div>
+                <input name="slug" placeholder="new-chat-ui" class="w-full rounded-lg border border-gray-700 bg-gray-950/40 px-3 py-2 text-sm text-white" />
+            </label>
+
+            <label class="block">
+                <div class="text-xs text-gray-400 mb-1">Title</div>
+                <input name="title" placeholder="New Chat UI" class="w-full rounded-lg border border-gray-700 bg-gray-950/40 px-3 py-2 text-sm text-white" />
+            </label>
+
+            <label class="block sm:col-span-2">
+                <div class="text-xs text-gray-400 mb-1">Description</div>
+                <textarea name="description" rows="2" class="w-full rounded-lg border border-gray-700 bg-gray-950/40 px-3 py-2 text-sm text-white" placeholder="What is this beta feature?"></textarea>
+            </label>
+
+            <label class="inline-flex items-center gap-2 sm:col-span-2 text-sm text-gray-200">
+                <input type="checkbox" name="requires_founder_club" value="1" checked />
+                <span>Founder Club only (recommended)</span>
+            </label>
+
+            <div class="sm:col-span-2">
+                <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg px-4 py-2 transition-colors text-sm font-semibold">Create</button>
+            </div>
+        </form>
+    </div>
+
+    <div class="rounded-2xl border border-gray-800 bg-gray-900/50 overflow-hidden">
+        <div class="px-4 py-3 border-b border-gray-800">
+            <div class="text-sm font-semibold text-gray-200">Existing features</div>
+        </div>
+
+        {% if features %}
+            <div class="divide-y divide-gray-800">
+                {% for f in features %}
+                    <div class="px-4 py-4 flex flex-col gap-2">
+                        <div class="flex items-start justify-between gap-4">
+                            <div class="min-w-0">
+                                <div class="text-white font-semibold truncate">{{ f.title }} <span class="text-gray-500 text-xs">({{ f.slug }})</span></div>
+                                {% if f.description %}
+                                    <div class="text-xs text-gray-400 mt-1">{{ f.description }}</div>
+                                {% endif %}
+                            </div>
+
+                            <div class="flex items-center gap-2 shrink-0">
+                                <form method="post" class="m-0">
+                                    {% csrf_token %}
+                                    <input type="hidden" name="action" value="toggle_enabled" />
+                                    <input type="hidden" name="slug" value="{{ f.slug }}" />
+                                    <button type="submit" class="rounded-lg px-3 py-1.5 text-xs font-semibold border border-gray-700 hover:bg-gray-800 transition-colors {% if f.is_enabled %}bg-emerald-500/15 text-emerald-200 border-emerald-500/30{% else %}bg-gray-950/40 text-gray-200{% endif %}">
+                                        {% if f.is_enabled %}Enabled (beta){% else %}Disabled{% endif %}
+                                    </button>
+                                </form>
+
+                                <form method="post" class="m-0">
+                                    {% csrf_token %}
+                                    <input type="hidden" name="action" value="toggle_founder_only" />
+                                    <input type="hidden" name="slug" value="{{ f.slug }}" />
+                                    <button type="submit" class="rounded-lg px-3 py-1.5 text-xs font-semibold border border-gray-700 hover:bg-gray-800 transition-colors {% if f.requires_founder_club %}bg-yellow-500/10 text-yellow-200 border-yellow-500/30{% else %}bg-sky-500/10 text-sky-200 border-sky-500/30{% endif %}">
+                                        {% if f.requires_founder_club %}Founder only{% else %}Open to all{% endif %}
+                                    </button>
+                                </form>
+                            </div>
+                        </div>
+
+                        <div class="text-[11px] text-gray-500">
+                            Updated {{ f.updated_at|date:"M d, Y H:i" }}
+                        </div>
+                    </div>
+                {% endfor %}
+            </div>
+        {% else %}
+            <div class="px-4 py-6 text-sm text-gray-400">No beta features yet.</div>
+        {% endif %}
+    </div>
+
+    <div class="rounded-2xl border border-gray-800 bg-gray-950/40 p-4">
+        <div class="text-sm font-semibold text-gray-200">How to use in templates</div>
+        <div class="mt-2 text-xs text-gray-400 leading-6">
+            Load tag: <span class="font-mono">{% templatetag openblock %} load beta_features {% templatetag closeblock %}</span><br/>
+            Check visible: <span class="font-mono">{% templatetag openblock %} beta_feature_enabled 'new-chat-ui' as show {% templatetag closeblock %}</span><br/>
+            Check access: <span class="font-mono">{% templatetag openblock %} beta_feature_access 'new-chat-ui' as can_use {% templatetag closeblock %}</span>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -37,10 +37,6 @@ class MaintenanceModeMiddleware:
         except Exception:
             enabled = False
 
-        # If user is on /maintenance/ but maintenance is OFF, send them back.
-        if path.startswith('/maintenance/') and not enabled:
-            return redirect('/')
-
         # Always allow these routes/resources.
         allow_prefixes = (
             '/maintenance/',

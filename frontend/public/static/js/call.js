@@ -460,6 +460,42 @@
 
     // --- WebSocket presence/control ---
     let socket = null;
+    let __wsReconnectTimer = null;
+    let __wsReconnectAttempt = 0;
+
+    const __WS_RECONNECT_BASE_MS = 900;
+    const __WS_RECONNECT_FACTOR = 1.7;
+    const __WS_RECONNECT_MAX_MS = 30_000;
+
+    function __scheduleWsReconnect() {
+        if (__wsReconnectTimer) return;
+
+        const attempt = Math.min(30, Math.max(0, __wsReconnectAttempt || 0));
+        __wsReconnectAttempt = attempt + 1;
+
+        if (attempt >= 4) {
+            try {
+                window.__vixoCallWsWarned = window.__vixoCallWsWarned || false;
+                if (!window.__vixoCallWsWarned) {
+                    window.__vixoCallWsWarned = true;
+                    toast('Connection issue. Retrying…', { timeoutMs: 3500 });
+                }
+            } catch {}
+        }
+
+        let delay = Math.min(
+            __WS_RECONNECT_MAX_MS,
+            Math.round(__WS_RECONNECT_BASE_MS * Math.pow(__WS_RECONNECT_FACTOR, attempt))
+        );
+
+        delay = Math.round(delay * (0.7 + Math.random() * 0.6));
+        try { if (document.visibilityState === 'hidden') delay = Math.max(delay, 5000); } catch {}
+
+        __wsReconnectTimer = setTimeout(() => {
+            __wsReconnectTimer = null;
+            connectWs();
+        }, delay);
+    }
 
     function handleCallControl(payload) {
         if (!payload) return;
@@ -476,7 +512,28 @@
     }
 
     function connectWs() {
-        socket = new WebSocket(wsUrl);
+        try {
+            if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
+        } catch {}
+
+        try {
+            if (socket && socket.close) socket.close();
+        } catch {}
+
+        try {
+            socket = new WebSocket(wsUrl);
+        } catch {
+            __scheduleWsReconnect();
+            return;
+        }
+
+        socket.onopen = function () {
+            __wsReconnectAttempt = 0;
+            if (__wsReconnectTimer) {
+                try { clearTimeout(__wsReconnectTimer); } catch {}
+                __wsReconnectTimer = null;
+            }
+        };
 
         socket.onmessage = function (event) {
             let payload;
@@ -492,7 +549,7 @@
         };
 
         socket.onclose = function () {
-            setTimeout(connectWs, 1000);
+            __scheduleWsReconnect();
         };
     }
 

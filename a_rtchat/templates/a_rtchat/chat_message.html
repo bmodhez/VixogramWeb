@@ -26,16 +26,25 @@
                         class="inline-flex items-center gap-2 min-w-0"
                     >
                         <img src="{{ message.author.profile.avatar }}" class="w-6 h-6 rounded-full object-cover border border-white/10">
-                        <span class="text-[14px] font-semibold text-gray-200 truncate">{{ message.author.profile.name|default:message.author.username }}</span>
+                        <span class="text-[14px] font-semibold truncate {% if message.author.profile.is_founder_club %}founder{% else %}text-gray-200{% endif %}">
+                            {% if message.author.profile.is_founder_club %}👑{% endif %}
+                            {{ message.author.profile.name|default:message.author.username }}
+                        </span>
                         {% if verified_user_ids and message.author_id in verified_user_ids %}
                             <span class="inline-flex h-4 w-4 items-center justify-center rounded-full bg-sky-500/20 text-sky-300 text-[10px] leading-none" title="Verified" aria-label="Verified">✓</span>
+                        {% endif %}
+                        {% if message.author.profile.is_founder_club %}
+                            <span class="role-badge founder-badge" title="Founder Club" aria-label="Founder Club">Founder</span>
                         {% endif %}
                     </a>
                 {% else %}
                     <span class="text-[14px] font-semibold text-gray-200/70 inline-flex items-center gap-2">
-                        <span>You</span>
+                        <span class="{% if user.profile.is_founder_club %}founder{% endif %}">{% if user.profile.is_founder_club %}👑{% endif %}You</span>
                         {% if verified_user_ids and user.id in verified_user_ids %}
                             <span class="inline-flex h-4 w-4 items-center justify-center rounded-full bg-sky-500/20 text-sky-300 text-[10px] leading-none" title="Verified" aria-label="Verified">✓</span>
+                        {% endif %}
+                        {% if user.profile.is_founder_club %}
+                            <span class="role-badge founder-badge" title="Founder Club" aria-label="Founder Club">Founder</span>
                         {% endif %}
                     </span>
                 {% endif %}

@@ -356,6 +356,7 @@
     const currentUsername = String(cfg.currentUsername || '');
     let lastOtherReadId = parseInt(cfg.otherLastReadId || 0, 10) || 0;
     const pollUrl = String(cfg.pollUrl || '');
+    const olderUrl = String(cfg.olderUrl || '');
     const inviteUrl = String(cfg.inviteUrl || '');
     const tokenUrl = String(cfg.tokenUrl || '');
     const presenceUrl = String(cfg.presenceUrl || '');
@@ -994,7 +995,6 @@
         ensureChatFeedVisible();
         try {
             hydrateLocalTimes(target);
-            applyConsecutiveHeaderGrouping(target);
             updateLastIdFromDom();
         } catch {
             // ignore
@@ -1762,7 +1762,99 @@
     const input = document.getElementById('id_body');
     const typedMsInput = document.getElementById('typed_ms');
     const messagesEl = document.getElementById('chat_messages');
-    const onlineCountEl = document.getElementById('online-count');
+    const loadOlderBtn = document.getElementById('chat_load_older');
+    const loadOlderWrap = document.getElementById('chat_load_older_wrap');
+    const onlineCountEl = document.getElementById('room-online-count');
+    const onlineCountMirrors = Array.from(document.querySelectorAll('[data-online-count-mirror]'));
+
+    let __loadingOlder = false;
+
+    async function loadOlderMessages() {
+        if (!olderUrl || !messagesEl || __loadingOlder) return;
+
+        const first = messagesEl.firstElementChild;
+        const beforeId = first && first.dataset ? (parseInt(first.dataset.messageId || '0', 10) || 0) : 0;
+        if (!beforeId) {
+            try { if (loadOlderWrap) loadOlderWrap.style.display = 'none'; } catch {}
+            return;
+        }
+
+        __loadingOlder = true;
+        const prevText = loadOlderBtn ? loadOlderBtn.textContent : '';
+        try {
+            if (loadOlderBtn) {
+                loadOlderBtn.disabled = true;
+                loadOlderBtn.textContent = 'Loading…';
+            }
+
+            const chatContainer = document.getElementById('chat_container');
+            const prevScrollHeight = chatContainer ? chatContainer.scrollHeight : 0;
+            const prevScrollTop = chatContainer ? chatContainer.scrollTop : 0;
+
+            const res = await fetch(`${olderUrl}?before=${beforeId}`, {
+                method: 'GET',
+                headers: { 'X-Requested-With': 'XMLHttpRequest' },
+                credentials: 'same-origin',
+            });
+            if (!res.ok) throw new Error('history_fetch_failed');
+
+            const data = await res.json();
+            const html = data && typeof data.messages_html === 'string' ? data.messages_html : '';
+            if (html) {
+                messagesEl.insertAdjacentHTML('afterbegin', html);
+                try { hydrateLocalTimes(messagesEl); } catch {}
+                try { applyConsecutiveHeaderGrouping(messagesEl); } catch {}
+
+                if (chatContainer) {
+                    const newScrollHeight = chatContainer.scrollHeight;
+                    const delta = newScrollHeight - prevScrollHeight;
+                    chatContainer.scrollTop = prevScrollTop + (delta > 0 ? delta : 0);
+                }
+            }
+
+            const hasMore = !!(data && data.has_more);
+            if (!hasMore) {
+                try { if (loadOlderWrap) loadOlderWrap.style.display = 'none'; } catch {}
+            }
+        } catch {
+            // ignore
+        } finally {
+            __loadingOlder = false;
+            try {
+                if (loadOlderBtn) {
+                    loadOlderBtn.disabled = false;
+                    loadOlderBtn.textContent = prevText || 'Load older';
+                }
+            } catch {
+                // ignore
+            }
+        }
+    }
+
+    (function initLoadOlder() {
+        if (!loadOlderBtn) return;
+        loadOlderBtn.addEventListener('click', (e) => {
+            try { e.preventDefault(); } catch {}
+            loadOlderMessages();
+        });
+    })();
+
+    function __setOnlineCount(v) {
+        const val = (v === undefined || v === null) ? '' : String(v);
+        try { if (onlineCountEl) onlineCountEl.textContent = val; } catch {}
+        for (const el of onlineCountMirrors) {
+            try { el.textContent = val; } catch {}
+        }
+    }
+
+    try {
+        if (onlineCountEl && typeof MutationObserver !== 'undefined') {
+            const obs = new MutationObserver(() => {
+                try { __setOnlineCount(onlineCountEl.textContent || ''); } catch {}
+            });
+            obs.observe(onlineCountEl, { characterData: true, childList: true, subtree: true });
+        }
+    } catch {}
 
     // Chat input behavior:
     // - Enter: send
@@ -2175,6 +2267,7 @@
     let __wsHeartbeatTimer = null;
     let __wsReconnectAttempt = 0;
     let __pollTimer = null;
+    let __pollInFlight = false;
 
     const __WS_HEARTBEAT_MS = 25_000;
     const __WS_RECONNECT_BASE_MS = 900;
@@ -2238,7 +2331,7 @@
 
     function startPolling() {
         if (__pollTimer) return;
-        __pollTimer = setInterval(poll, 1200);
+        __pollTimer = setInterval(poll, 3500);
     }
 
     function stopPolling() {
@@ -2487,9 +2580,10 @@
 
     function hydrateLocalTimes(root) {
         const container = root || document;
-        const nodes = container.querySelectorAll ? container.querySelectorAll('time[data-dt]') : [];
-        if (!nodes || !nodes.length) return;
+        const nodeList = container && container.querySelectorAll ? container.querySelectorAll('time[data-dt]') : null;
+        if (!nodeList || !nodeList.length) return;
 
+        const nodes = Array.from(nodeList);
         const timeFmt = new Intl.DateTimeFormat(undefined, {
             hour: '2-digit',
             minute: '2-digit',
@@ -2499,17 +2593,30 @@
             timeStyle: 'short',
         });
 
-        nodes.forEach((el) => {
+        const applyOne = (el) => {
             const iso = el.getAttribute('data-dt');
             if (!iso) return;
             const d = new Date(iso);
             if (Number.isNaN(d.getTime())) return;
+            try { el.textContent = timeFmt.format(d); } catch {}
+            try { el.setAttribute('title', fullFmt.format(d)); } catch {}
+            try { if (!el.getAttribute('datetime')) el.setAttribute('datetime', iso); } catch {}
+        };
 
-            el.textContent = timeFmt.format(d);
-            // Hover tooltip for clarity across dates/timezones
-            el.setAttribute('title', fullFmt.format(d));
-            if (!el.getAttribute('datetime')) el.setAttribute('datetime', iso);
-        });
+        // Chunk work to avoid long main-thread blocks on big rooms.
+        const batchSize = 200;
+        if (nodes.length <= batchSize) {
+            nodes.forEach(applyOne);
+            return;
+        }
+
+        let i = 0;
+        const run = () => {
+            const end = Math.min(nodes.length, i + batchSize);
+            for (; i < end; i++) applyOne(nodes[i]);
+            if (i < nodes.length) requestAnimationFrame(run);
+        };
+        requestAnimationFrame(run);
     }
 
     function revealChatContainer() {
@@ -2606,6 +2713,7 @@
             }
 
             if (payload.type === 'chat_message' && payload.html) {
+                const __wasNearBottom = isNearBottom();
                 try {
                     const nonce = payload.client_nonce ? String(payload.client_nonce) : '';
                     if (nonce) {
@@ -2649,7 +2757,7 @@
                 }
                 hydrateLocalTimes(messagesEl);
                 updateLastIdFromDom();
-                const shouldForce = !!window.__forceNextChatScroll || (!!__chatAutoScrollEnabled && isNearBottom());
+                const shouldForce = !!window.__forceNextChatScroll || (!!__chatAutoScrollEnabled && __wasNearBottom);
                 if (window.__forceNextChatScroll) {
                     window.__forceNextChatScroll = false;
                     __chatAutoScrollEnabled = true;
@@ -2666,6 +2774,7 @@
             }
 
             if (payload.type === 'challenge_event' && payload.html) {
+                const __wasNearBottom = isNearBottom();
                 const emptyEl = document.getElementById('empty_state');
                 if (emptyEl) emptyEl.remove();
                 if (messagesEl && messagesEl.classList.contains('hidden')) {
@@ -2673,10 +2782,9 @@
                 }
                 messagesEl.insertAdjacentHTML('beforeend', payload.html);
                 hydrateLocalTimes(messagesEl);
-                applyConsecutiveHeaderGrouping(messagesEl);
                 updateLastIdFromDom();
                 if (payload.state) setChallengeState(payload.state);
-                const shouldForce = !!window.__forceNextChatScroll || (!!__chatAutoScrollEnabled && isNearBottom());
+                const shouldForce = !!window.__forceNextChatScroll || (!!__chatAutoScrollEnabled && __wasNearBottom);
                 if (window.__forceNextChatScroll) {
                     window.__forceNextChatScroll = false;
                     __chatAutoScrollEnabled = true;
@@ -2771,7 +2879,7 @@
             }
 
             if (payload.type === 'online_count' && typeof payload.online_count !== 'undefined') {
-                if (onlineCountEl) onlineCountEl.textContent = payload.online_count;
+                __setOnlineCount(payload.online_count);
             }
 
             if (payload.type === 'call_invite') {
@@ -3718,7 +3826,14 @@
             return;
         }
         wsConnected = false;
+        if (__pollInFlight) return;
+        __pollInFlight = true;
         try {
+            try {
+                if (document.visibilityState === 'hidden') return;
+            } catch {
+                // ignore
+            }
             updateLastIdFromDom();
                         const res = await fetch(`${pollUrl}?after=${lastId}`,
                             {
@@ -3728,9 +3843,10 @@
             if (!res.ok) return;
             const data = await res.json();
             if (data && typeof data.online_count !== 'undefined') {
-                if (onlineCountEl) onlineCountEl.textContent = data.online_count;
+                __setOnlineCount(data.online_count);
             }
             if (data && data.messages_html) {
+                const __wasNearBottom = isNearBottom();
                 const emptyEl = document.getElementById('empty_state');
                 if (emptyEl) emptyEl.remove();
                 if (messagesEl && messagesEl.classList.contains('hidden')) {
@@ -3739,7 +3855,7 @@
                 messagesEl.insertAdjacentHTML('beforeend', data.messages_html);
                 hydrateLocalTimes(messagesEl);
                 updateLastIdFromDom();
-                if (__chatAutoScrollEnabled) forceScrollToBottomNow();
+                if (__chatAutoScrollEnabled && __wasNearBottom) forceScrollToBottomNow();
             }
             if (data && typeof data.last_id !== 'undefined') {
                 const newLast = parseInt(String(data.last_id), 10);
@@ -3747,6 +3863,8 @@
             }
         } catch {
             // ignore
+        } finally {
+            __pollInFlight = false;
         }
     }
 

@@ -49,6 +49,23 @@ This template is loaded into the profile follow-list modal body via HTMX.
                   <div class="text-xs text-gray-400 truncate">@{{ u.username }}</div>
                 </div>
               </a>
+
+              {% if is_owner %}
+                <form
+                  method="post"
+                  action="{% url 'remove-follower' u.username %}{% if is_full %}?full=1{% endif %}"
+                  hx-post="{% url 'remove-follower' u.username %}{% if is_full %}?full=1{% endif %}"
+                  hx-target="#follow_modal_body"
+                  hx-swap="innerHTML"
+                  hx-confirm="Remove @{{ u.username }} from your followers?"
+                  data-confirm-title="Remove follower"
+                >
+                  {% csrf_token %}
+                  <button type="submit" class="text-xs bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded-lg transition-colors">
+                    Remove
+                  </button>
+                </form>
+              {% endif %}
             </div>
           {% endwith %}
         {% else %}
@@ -79,6 +96,8 @@ This template is loaded into the profile follow-list modal body via HTMX.
                   action="{% url 'follow-toggle' u.username %}"
                   hx-post="{% url 'follow-toggle' u.username %}"
                   hx-swap="none"
+                       hx-confirm="Are you sure you want to unfollow @{{ u.username }}?"
+                       data-confirm-title="Unfollow"
                 >
                   {% csrf_token %}
                   <button type="submit" class="text-xs bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded-lg transition-colors">

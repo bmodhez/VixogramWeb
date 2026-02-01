@@ -8,7 +8,7 @@ except Exception:  # pragma: no cover
 	async_to_sync = None
 	get_channel_layer = None
 
-from .models import Profile, SupportEnquiry, UserReport
+from .models import BetaFeature, Profile, SupportEnquiry, UserReport
 
 try:
 	from a_rtchat.models import Notification
@@ -20,6 +20,14 @@ except Exception:  # pragma: no cover
 class ProfileAdmin(admin.ModelAdmin):
 	list_display = ('user', 'displayname', 'chat_blocked', 'is_private_account')
 	search_fields = ('user__username', 'displayname')
+
+
+@admin.register(BetaFeature)
+class BetaFeatureAdmin(admin.ModelAdmin):
+	list_display = ('slug', 'title', 'is_enabled', 'requires_founder_club', 'updated_at')
+	list_filter = ('is_enabled', 'requires_founder_club')
+	search_fields = ('slug', 'title')
+	list_editable = ('is_enabled', 'requires_founder_club')
 
 
 @admin.register(UserReport)

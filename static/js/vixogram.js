@@ -999,6 +999,10 @@
   function initAuthenticatedNotifiers(baseCfg) {
     if (!baseCfg || !baseCfg.userAuthenticated) return;
 
+    // Safety: if this bundle is included twice, avoid spawning duplicate WS clients/timers.
+    if (window.__vixoAuthenticatedNotifiersStarted) return;
+    window.__vixoAuthenticatedNotifiersStarted = true;
+
     // Lets chat pages know a global handler exists (avoid duplicate toasts)
     window.__hasGlobalCallInvite = true;
     window.__hasGlobalMentionNotify = true;
@@ -1013,12 +1017,15 @@
     const __WS_RECONNECT_FACTOR = 1.7;
     const __WS_RECONNECT_MAX_MS = 30_000;
 
-    // Maintain a global online presence socket (no UI needed here).
+    // Maintain a global online presence socket.
+    // NOTE: This socket also drives "am I online" presence. Keep it connected,
+    // but only do HTML parsing / UI updates when the legacy navbar pill exists.
     (function connectOnlineStatus() {
       let onlineSocket;
       let pingTimer;
       let reconnectTimer;
       let attempt = 0;
+      let stopped = false;
 
       const stopPing = () => {
         try { if (pingTimer) clearInterval(pingTimer); } catch {}
@@ -1029,6 +1036,7 @@
         if (reconnectTimer) return;
         const a = Math.min(30, Math.max(0, attempt));
         attempt = a + 1;
+        if (attempt >= 5) warnRealtimeOnce('online-status', 'Online status is reconnecting. Some realtime features may be delayed.');
         let delay = Math.min(__WS_RECONNECT_MAX_MS, Math.round(__WS_RECONNECT_BASE_MS * Math.pow(__WS_RECONNECT_FACTOR, a)));
         delay = Math.round(delay * (0.7 + Math.random() * 0.6));
         try { if (document.visibilityState === 'hidden') delay = Math.max(delay, 5000); } catch {}
@@ -1036,32 +1044,69 @@
       };
 
       const connect = () => {
+        if (stopped) return;
         try {
           onlineSocket = new WebSocket(wsOnlineUrl);
         } catch {
           return;
         }
 
-        attempt = 0;
-        stopPing();
-        pingTimer = setInterval(() => {
-          try {
-            if (!onlineSocket || onlineSocket.readyState !== WebSocket.OPEN) return;
-            onlineSocket.send(JSON.stringify({ type: 'ping' }));
-          } catch {}
-        }, __WS_HEARTBEAT_MS);
+        onlineSocket.onopen = () => {
+          attempt = 0;
+          stopPing();
+          pingTimer = setInterval(() => {
+            try {
+              if (!onlineSocket || onlineSocket.readyState !== WebSocket.OPEN) return;
+              onlineSocket.send(JSON.stringify({ type: 'ping' }));
+            } catch {}
+          }, __WS_HEARTBEAT_MS);
+        };
 
-        onlineSocket.onmessage = () => {
-          // Server may send rendered HTML for legacy sidebar widgets; ignore.
+        onlineSocket.onmessage = (event) => {
+          // If the UI doesn't show online counts, skip expensive parsing work.
+          try {
+            if (!document.getElementById('nav_online_count')) return;
+          } catch {
+            // ignore
+          }
+          const raw = (event && typeof event.data === 'string') ? event.data : '';
+          if (!raw) return;
+
+          let total = null;
+          try {
+            const doc = new DOMParser().parseFromString(raw, 'text/html');
+            const el = doc.querySelector('#global-online-total');
+            total = el ? el.getAttribute('data-total-online') : null;
+          } catch {}
+
+          if (total === null || total === undefined) return;
+          const count = parseInt(String(total), 10);
+          if (!Number.isFinite(count)) return;
+
+          try {
+            const wrap = document.getElementById('nav_online_count');
+            const countEl = document.getElementById('online-count');
+            if (countEl) countEl.textContent = String(count);
+            if (wrap && count > 0) wrap.classList.remove('hidden');
+          } catch {}
         };
         onlineSocket.onclose = () => {
           stopPing();
           try {
             if (document.visibilityState === 'hidden') return;
           } catch {}
+          if (stopped) return;
           scheduleReconnect();
         };
       };
+
+      window.addEventListener('beforeunload', () => {
+        stopped = true;
+        stopPing();
+        try { if (reconnectTimer) clearTimeout(reconnectTimer); } catch {}
+        reconnectTimer = null;
+        try { if (onlineSocket && onlineSocket.close) onlineSocket.close(); } catch {}
+      }, { once: true });
       connect();
     })();
 
@@ -1257,6 +1302,39 @@
       c.className = 'fixed top-24 right-6 z-50 w-[min(24rem,calc(100vw-3rem))] space-y-3';
       document.body.appendChild(c);
       return c;
+    }
+
+    function warnRealtimeOnce(key, message) {
+      try {
+        const k = String(key || 'ws');
+        window.__vixoRealtimeWarned = window.__vixoRealtimeWarned || {};
+        if (window.__vixoRealtimeWarned[k]) return;
+        window.__vixoRealtimeWarned[k] = true;
+
+        const container = ensureIncomingContainer();
+        const toast = document.createElement('div');
+        toast.className = 'pointer-events-auto flex items-start gap-3 rounded-xl border border-amber-700/40 bg-gray-900/90 px-4 py-3 text-sm text-gray-100 shadow-lg shadow-black/20 transition duration-200 ease-out transform-gpu';
+        const msg = String(message || 'Realtime connection is unstable. Retrying…');
+        toast.innerHTML = `
+          <div class="mt-0.5 h-2.5 w-2.5 flex-none rounded-full bg-amber-400"></div>
+          <div class="flex-1 min-w-0">
+            <div class="font-semibold">Realtime issue</div>
+            <div class="mt-1 text-xs text-gray-300">${escapeHtml(msg)}</div>
+          </div>
+          <button type="button" data-close class="-mr-1 -mt-1 inline-flex h-8 w-8 items-center justify-center rounded-lg text-gray-300 hover:text-white hover:bg-gray-800/60 transition" aria-label="Dismiss">
+            <span aria-hidden="true">×</span>
+          </button>
+        `;
+
+        const removeToast = () => { toast.classList.add('opacity-0'); setTimeout(() => toast.remove(), 200); };
+        toast.querySelector('[data-close]')?.addEventListener('click', removeToast);
+        setTimeout(removeToast, 8000);
+
+        container.appendChild(toast);
+        animateToastIn(toast);
+      } catch {
+        // ignore
+      }
     }
 
     function stopIncomingRing() {
@@ -1739,6 +1817,8 @@
       let reconnectTimer;
       let attempt = 0;
 
+      let stopped = false;
+
       const stopPing = () => {
         try { if (pingTimer) clearInterval(pingTimer); } catch {}
         pingTimer = null;
@@ -1748,6 +1828,7 @@
         if (reconnectTimer) return;
         const a = Math.min(30, Math.max(0, attempt));
         attempt = a + 1;
+        if (attempt >= 5) warnRealtimeOnce('notify', 'Notifications are reconnecting. Calls/mentions may be delayed.');
         let delay = Math.min(__WS_RECONNECT_MAX_MS, Math.round(__WS_RECONNECT_BASE_MS * Math.pow(__WS_RECONNECT_FACTOR, a)));
         delay = Math.round(delay * (0.7 + Math.random() * 0.6));
         try { if (document.visibilityState === 'hidden') delay = Math.max(delay, 5000); } catch {}
@@ -1760,14 +1841,16 @@
         return;
       }
 
-      attempt = 0;
-      stopPing();
-      pingTimer = setInterval(() => {
-        try {
-          if (!socket || socket.readyState !== WebSocket.OPEN) return;
-          socket.send(JSON.stringify({ type: 'ping' }));
-        } catch {}
-      }, __WS_HEARTBEAT_MS);
+      socket.onopen = () => {
+        attempt = 0;
+        stopPing();
+        pingTimer = setInterval(() => {
+          try {
+            if (!socket || socket.readyState !== WebSocket.OPEN) return;
+            socket.send(JSON.stringify({ type: 'ping' }));
+          } catch {}
+        }, __WS_HEARTBEAT_MS);
+      };
 
       socket.onmessage = function (event) {
         let payload;
@@ -1856,8 +1939,17 @@
 
       socket.onclose = function () {
         stopPing();
+        if (stopped) return;
         scheduleReconnect();
       };
+
+      window.addEventListener('beforeunload', () => {
+        stopped = true;
+        stopPing();
+        try { if (reconnectTimer) clearTimeout(reconnectTimer); } catch {}
+        reconnectTimer = null;
+        try { if (socket && socket.close) socket.close(); } catch {}
+      }, { once: true });
     }
 
     connect();
@@ -2033,6 +2125,8 @@
     let __gaPingTimer = null;
     let __gaReconnectTimer = null;
     let __gaAttempt = 0;
+    let __gaSocket = null;
+    let __gaNeedsReconnect = false;
 
     const __gaStopPing = () => {
       try { if (__gaPingTimer) clearInterval(__gaPingTimer); } catch {}
@@ -2069,7 +2163,7 @@
       }
     };
 
-    (function connectGlobalAnnouncement() {
+    const connectGlobalAnnouncement = () => {
       let socket;
       try {
         socket = new WebSocket(wsUrl);
@@ -2077,14 +2171,19 @@
         return;
       }
 
-      __gaAttempt = 0;
-      __gaStopPing();
-      __gaPingTimer = setInterval(() => {
-        try {
-          if (!socket || socket.readyState !== WebSocket.OPEN) return;
-          socket.send(JSON.stringify({ type: 'ping' }));
-        } catch {}
-      }, __WS_HEARTBEAT_MS);
+      __gaSocket = socket;
+      __gaNeedsReconnect = false;
+
+      socket.onopen = () => {
+        __gaAttempt = 0;
+        __gaStopPing();
+        __gaPingTimer = setInterval(() => {
+          try {
+            if (!socket || socket.readyState !== WebSocket.OPEN) return;
+            socket.send(JSON.stringify({ type: 'ping' }));
+          } catch {}
+        }, __WS_HEARTBEAT_MS);
+      };
 
       socket.onmessage = (event) => {
         let payload;
@@ -2095,12 +2194,43 @@
 
       socket.onclose = () => {
         __gaStopPing();
+        __gaSocket = null;
         try {
-          if (document.visibilityState === 'hidden') return;
+          if (document.visibilityState === 'hidden') {
+            __gaNeedsReconnect = true;
+            return;
+          }
         } catch {}
         __gaScheduleReconnect(connectGlobalAnnouncement);
       };
-    })();
+
+      socket.onerror = () => {
+        // Some browsers fire onerror without onclose; let onclose handle reconnect.
+      };
+    };
+
+    // Initial connect.
+    connectGlobalAnnouncement();
+
+    // If the socket was dropped while the tab was hidden, reconnect when visible.
+    try {
+      document.addEventListener('visibilitychange', () => {
+        try {
+          if (document.visibilityState !== 'visible') return;
+          if (!__gaNeedsReconnect) return;
+          if (__gaReconnectTimer) return;
+          if (__gaSocket && __gaSocket.readyState === WebSocket.OPEN) {
+            __gaNeedsReconnect = false;
+            return;
+          }
+          connectGlobalAnnouncement();
+        } catch {
+          // ignore
+        }
+      });
+    } catch {
+      // ignore
+    }
   }
 
   function initMaintenancePolling(baseCfg) {

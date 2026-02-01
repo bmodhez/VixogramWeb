@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import time
+import logging
+import smtplib
 
 from allauth.account.views import EmailView
 from django.contrib import messages
 from django.core.cache import cache
+
+
+logger = logging.getLogger(__name__)
 
 
 class CooldownEmailView(EmailView):
@@ -30,4 +35,16 @@ class CooldownEmailView(EmailView):
                     # Re-render via redirect (same behavior as allauth).
                     return self.get(request, *args, **kwargs)
 
-        return super().post(request, *args, **kwargs)
+        try:
+            return super().post(request, *args, **kwargs)
+        except smtplib.SMTPAuthenticationError:
+            logger.exception("SMTP auth failed while sending allauth email")
+            messages.error(
+                request,
+                "Email login failed (SMTP). If you're using Gmail, set an App Password in EMAIL_HOST_PASSWORD.",
+            )
+            return self.get(request, *args, **kwargs)
+        except smtplib.SMTPException:
+            logger.exception("SMTP error while sending allauth email")
+            messages.error(request, "Could not send email right now. Please try again later.")
+            return self.get(request, *args, **kwargs)

@@ -37,11 +37,16 @@ body {
 
 /* Auth pages (login/signup): full background image + glass card */
 .vixo-auth-bg {
+  /* Defaults; can be overridden per-page via inline style. */
+  --vixo-auth-overlay: 0.78;
   background-image:
-    linear-gradient(rgba(2, 6, 23, 0.78), rgba(2, 6, 23, 0.78)),
+    linear-gradient(
+      rgba(2, 6, 23, var(--vixo-auth-overlay)),
+      rgba(2, 6, 23, var(--vixo-auth-overlay))
+    ),
     var(--vixo-auth-bg);
-  background-size: cover;
-  background-position: center;
+  background-size: var(--vixo-auth-bg-size, cover);
+  background-position: var(--vixo-auth-bg-position, center);
   background-repeat: no-repeat;
 
   /* Page transition (enter/leave) */
@@ -65,9 +70,11 @@ body.vixo-auth-page.vixo-page-leave .vixo-auth-bg {
   filter: blur(2px);
 }
 
-/* When side ads are hidden, force a single-column grid even on very wide screens. */
-body.vixo-auth-page .vixo-site-grid {
-  grid-template-columns: minmax(0, 100%) !important;
+/* Auth pages: force a single-column grid on mobile only. */
+@media (max-width: 639px) {
+  body.vixo-auth-page .vixo-site-grid {
+    grid-template-columns: minmax(0, 100%) !important;
+  }
 }
 
 /* Private chat: "new messages" jump indicator (logo bubble + arrow) */

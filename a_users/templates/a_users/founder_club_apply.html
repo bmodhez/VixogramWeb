@@ -1,0 +1,58 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="w-full max-w-xl mx-auto">
+  <div class="rounded-2xl border border-gray-800 bg-gray-900/50 backdrop-blur p-5 sm:p-6">
+    <div class="flex items-start justify-between gap-4">
+      <div>
+        <h1 class="text-xl sm:text-2xl font-bold text-white">Founder Club</h1>
+        <p class="mt-1 text-sm text-gray-400">Apply to unlock your Founder Club role.</p>
+      </div>
+      <a href="{% url 'invite-friends' %}" class="text-sm text-gray-300 hover:text-white px-3 py-2 rounded-lg hover:bg-gray-800 transition-colors">Back</a>
+    </div>
+
+    <div class="mt-5 rounded-2xl border border-gray-800 bg-gray-950/40 p-4">
+      <div class="text-sm font-semibold text-gray-200">Eligibility</div>
+      <div class="mt-2 text-sm text-gray-300 space-y-1">
+        <div>Points: <span class="font-semibold text-white">{{ points }}</span> / {{ required_points }}</div>
+        <div>Verified invites: <span class="font-semibold text-white">{{ verified_invites }}</span> / {{ required_invites }}</div>
+        <div>Account age: <span class="font-semibold text-white">{{ account_age_days }}</span> / {{ min_account_age_days }} days</div>
+      </div>
+
+      {% if reapply_at %}
+        <div class="mt-3 text-xs text-gray-400">
+          If your role was removed, you can reapply after: <span class="text-gray-200 font-semibold">{{ reapply_at|date:'M d, Y H:i' }}</span>
+        </div>
+      {% endif %}
+    </div>
+
+    <div class="mt-4 rounded-2xl border border-gray-800 bg-gray-950/40 p-4">
+      <div class="text-sm font-semibold text-gray-200">Benefits</div>
+      <ul class="mt-2 text-sm text-gray-300 space-y-1">
+        <li>👑 Founder Club</li>
+        <li>No ads (future)</li>
+        <li>Special role</li>
+        <li>Name glow / crown icon</li>
+        <li>Access to beta features</li>
+      </ul>
+      <div class="mt-3 text-xs text-gray-500">
+        After you get Founder Club, your account must stay active for at least 1 hour every day. If not, the role will be removed.
+        To reactivate, you’ll need to reapply after 20 days.
+      </div>
+    </div>
+
+    <form method="post" class="mt-5">
+      {% csrf_token %}
+      {% if eligible %}
+        <button type="submit" class="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-semibold rounded-xl px-5 py-3 transition-colors">
+          Apply & Activate Founder Club
+        </button>
+      {% else %}
+        <button type="button" disabled class="w-full bg-gray-800 text-gray-400 font-semibold rounded-xl px-5 py-3 border border-gray-700 cursor-not-allowed">
+          Not eligible yet
+        </button>
+      {% endif %}
+    </form>
+  </div>
+</div>
+{% endblock %}

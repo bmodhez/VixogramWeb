@@ -1,4 +1,50 @@
 (function () {
+    function getProgressEls() {
+        try {
+            const root = document.getElementById('vixo-auth-progress');
+            if (!root) return null;
+            return {
+                root,
+                bar: document.getElementById('vixo-auth-progress-bar'),
+                pill: document.getElementById('vixo-auth-progress-pill'),
+                text: document.getElementById('vixo-auth-progress-text'),
+            };
+        } catch {
+            return null;
+        }
+    }
+
+    let progressRunning = false;
+    function showAuthProgress() {
+        if (progressRunning) return;
+        if (!isAuthPage()) return;
+        const els = getProgressEls();
+        if (!els || !els.root || !els.bar) return;
+
+        progressRunning = true;
+        try { els.root.classList.remove('hidden'); } catch {}
+        try { if (els.pill) els.pill.classList.remove('hidden'); } catch {}
+
+        let start = null;
+        const durationMs = 950;
+
+        const tick = (ts) => {
+            if (!start) start = ts;
+            const t = Math.min(1, (ts - start) / durationMs);
+            const eased = 1 - Math.pow(1 - t, 2.2);
+            const pct = Math.max(0, Math.min(100, Math.round(eased * 100)));
+
+            try { els.bar.style.width = pct + '%'; } catch {}
+            try { if (els.text) els.text.textContent = pct + '%'; } catch {}
+
+            if (t < 1) {
+                requestAnimationFrame(tick);
+            }
+        };
+
+        try { requestAnimationFrame(tick); } catch {}
+    }
+
     function isAuthPage() {
         try {
             return document.body && document.body.classList.contains('vixo-auth-page');
@@ -65,6 +111,8 @@
             if (!shouldHandleLinkClick(e, a)) return;
 
             e.preventDefault();
+
+            showAuthProgress();
             try {
                 document.body.classList.add('vixo-page-leave');
             } catch {
@@ -74,6 +122,17 @@
             window.setTimeout(function () {
                 window.location.href = href;
             }, 170);
+        }, true);
+
+        document.addEventListener('submit', function (e) {
+            if (!isAuthPage()) return;
+            const form = e.target;
+            if (!form || form.tagName !== 'FORM') return;
+
+            const action = (form.getAttribute('action') || '').toLowerCase();
+            if (action && !action.includes('/accounts/')) return;
+            if (e.defaultPrevented) return;
+            showAuthProgress();
         }, true);
     }
 

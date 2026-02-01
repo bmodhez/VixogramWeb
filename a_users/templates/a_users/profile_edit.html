@@ -8,6 +8,48 @@
         <h1 class="text-2xl font-extrabold mb-2 text-center bg-gradient-to-r from-purple-400 via-indigo-400 to-sky-400 bg-clip-text text-transparent">Edit profile</h1>
         <p class="text-center text-sm text-gray-400 mb-6">Update your avatar and profile details.</p>
 
+        <div class="mb-6 rounded-xl border border-gray-800 bg-gray-950/30 p-4">
+            <div class="text-sm font-semibold text-gray-200">Change username</div>
+            <p class="mt-1 text-xs text-gray-400">
+                First change is allowed anytime. After that, you can change again only after {{ username_cooldown_days }} days.
+            </p>
+            <div class="mt-2 text-sm text-gray-300">
+                Current: <span class="text-gray-100 font-semibold">@{{ user.username }}</span>
+            </div>
+            {% if not username_can_change and username_next_available_at %}
+                <div class="mt-2 text-xs text-amber-300">
+                    You can change again after {{ username_next_available_at|date:"M d, Y" }}.
+                </div>
+            {% endif %}
+
+            <form method="POST" action="{% url 'profile-edit' %}" class="mt-4 space-y-3" data-loading-text="Updating username…">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="username" />
+
+                <div class="flex flex-col gap-1">
+                    <label class="text-xs text-gray-400">New username</label>
+                    <div class="relative">
+                        {{ username_form.username }}
+                        <span id="username_status_icon" class="absolute right-3 top-1/2 -translate-y-1/2 text-sm hidden" aria-hidden="true"></span>
+                    </div>
+                    {% if username_form.username.errors %}
+                        <span class="text-red-500 text-xs">{{ username_form.username.errors|first }}</span>
+                    {% endif %}
+                    <div class="text-[11px] text-gray-500">Allowed: letters, numbers, underscore, dot (3–30 chars).</div>
+                    <div id="username_status_text" class="text-[11px] text-gray-500"></div>
+                </div>
+
+                <button
+                    type="submit"
+                    id="username_submit_btn"
+                    class="w-full bg-gray-800 hover:bg-gray-700 text-white rounded-lg px-3 py-2 text-sm transition-colors"
+                    {% if not username_can_change %}disabled style="opacity:.55;cursor:not-allowed"{% endif %}
+                >
+                    Update username
+                </button>
+            </form>
+        </div>
+
         <form method="POST" action="{% url 'profile-edit' %}" enctype="multipart/form-data" class="space-y-4" data-loading-text="Saving changes…">
             {% csrf_token %}
 
@@ -109,6 +151,129 @@
 {{ block.super }}
 <script>
 (() => {
+    // Username availability check (2s debounce)
+    const usernameInput = document.getElementById('id_username') || document.querySelector('input[name="username"]');
+    const usernameIcon = document.getElementById('username_status_icon');
+    const usernameStatus = document.getElementById('username_status_text');
+    const usernameBtn = document.getElementById('username_submit_btn');
+    const usernameCheckUrl = "{% url 'username-check' %}";
+    const usernameCanChangeNow = {{ username_can_change|yesno:"true,false" }};
+    const currentUsername = "{{ user.username }}";
+
+    const setBtnEnabled = (enabled) => {
+        if (!usernameBtn) return;
+        if (!usernameCanChangeNow) {
+            usernameBtn.disabled = true;
+            return;
+        }
+        usernameBtn.disabled = !enabled;
+        if (usernameBtn.disabled) {
+            usernameBtn.style.opacity = '.55';
+            usernameBtn.style.cursor = 'not-allowed';
+        } else {
+            usernameBtn.style.opacity = '';
+            usernameBtn.style.cursor = '';
+        }
+    };
+
+    const setState = (kind, message) => {
+        if (!usernameIcon || !usernameStatus) return;
+        usernameIcon.classList.remove('hidden');
+        usernameIcon.classList.remove('text-emerald-400', 'text-red-400', 'text-gray-400');
+
+        if (kind === 'ok') {
+            usernameIcon.textContent = '✓';
+            usernameIcon.classList.add('text-emerald-400');
+        } else if (kind === 'bad') {
+            usernameIcon.textContent = '✕';
+            usernameIcon.classList.add('text-red-400');
+        } else {
+            usernameIcon.textContent = '…';
+            usernameIcon.classList.add('text-gray-400');
+        }
+        usernameStatus.textContent = message || '';
+    };
+
+    const clearState = () => {
+        if (usernameIcon) usernameIcon.classList.add('hidden');
+        if (usernameStatus) usernameStatus.textContent = '';
+    };
+
+    if (usernameInput && usernameIcon && usernameStatus && usernameBtn) {
+        let timer = null;
+        let requestSeq = 0;
+
+        // Require a successful check before enabling.
+        setBtnEnabled(false);
+
+        const runCheck = async () => {
+            const val = (usernameInput.value || '').trim();
+            if (!val) {
+                clearState();
+                setBtnEnabled(false);
+                return;
+            }
+            if (val === currentUsername) {
+                setState('bad', 'That is already your username.');
+                setBtnEnabled(false);
+                return;
+            }
+            if (!usernameCanChangeNow) {
+                setState('bad', 'Cooldown active.');
+                setBtnEnabled(false);
+                return;
+            }
+
+            const mySeq = ++requestSeq;
+            setState('loading', 'Checking…');
+            try {
+                const resp = await fetch(`${usernameCheckUrl}?u=${encodeURIComponent(val)}`, { credentials: 'same-origin' });
+                if (mySeq !== requestSeq) return;
+                if (!resp.ok) {
+                    setState('bad', 'Could not check right now.');
+                    setBtnEnabled(false);
+                    return;
+                }
+                const data = await resp.json();
+                if (mySeq !== requestSeq) return;
+                if (data && data.available) {
+                    setState('ok', 'You can use this username');
+                    setBtnEnabled(true);
+                } else {
+                    setState('bad', (data && data.message) ? data.message : 'Username not available');
+                    setBtnEnabled(false);
+                }
+            } catch {
+                if (mySeq !== requestSeq) return;
+                setState('bad', 'Could not check right now.');
+                setBtnEnabled(false);
+            }
+        };
+
+        const schedule = () => {
+            if (timer) {
+                clearTimeout(timer);
+                timer = null;
+            }
+            const val = (usernameInput.value || '').trim();
+            if (!val) {
+                clearState();
+                setBtnEnabled(false);
+                return;
+            }
+            timer = setTimeout(runCheck, 2000);
+        };
+
+        usernameInput.addEventListener('input', schedule);
+        usernameInput.addEventListener('blur', () => {
+            if (timer) {
+                clearTimeout(timer);
+                timer = null;
+            }
+            runCheck();
+        });
+    }
+
     const fileInput = document.getElementById('id_image') || document.querySelector('input[type="file"][name="image"]');
     if (!fileInput) return;
 

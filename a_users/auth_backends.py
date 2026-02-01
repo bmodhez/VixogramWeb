@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.backends import ModelBackend
-from django.db.models import Q
+from django.core.exceptions import PermissionDenied
 
 
 class EmailOrUsernameModelBackend(ModelBackend):
@@ -20,12 +20,47 @@ class EmailOrUsernameModelBackend(ModelBackend):
 
         User = get_user_model()
 
+        # Email login: case-insensitive (RFC says local-part can be case-sensitive,
+        # but in practice providers treat it as case-insensitive).
+        # Username login: STRICT match only (case-sensitive), as requested.
         try:
-            user = (
-                User._default_manager.filter(Q(username__iexact=login) | Q(email__iexact=login))
-                .order_by("id")
-                .first()
-            )
+            if "@" in login:
+                user = (
+                    User._default_manager
+                    .filter(email__iexact=login)
+                    .order_by("id")
+                    .first()
+                )
+            else:
+                user = (
+                    User._default_manager
+                    .filter(username=login)
+                    .order_by("id")
+                    .first()
+                )
+
+                # Some databases/collations treat '=' comparisons as case-insensitive.
+                # Enforce strict casing at the application layer.
+                if user and (getattr(user, "username", "") != login):
+                    raise PermissionDenied("Username is case-sensitive")
+
+                # If the username exists but only with different casing,
+                # stop authentication here (prevents other backends from
+                # authenticating it case-insensitively).
+                if not user:
+                    ci_user = (
+                        User._default_manager
+                        .filter(username__iexact=login)
+                        .only("id", "username")
+                        .order_by("id")
+                        .first()
+                    )
+                    if ci_user and (getattr(ci_user, "username", "") != login):
+                        raise PermissionDenied("Username is case-sensitive")
+
+                    return None
+        except PermissionDenied:
+            raise
         except Exception:
             return None
 

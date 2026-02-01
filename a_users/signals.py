@@ -1,6 +1,10 @@
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 from django.contrib.auth.models import User
+try:
+    from django.contrib.auth.signals import user_logged_in as django_user_logged_in
+except Exception:  # pragma: no cover
+    django_user_logged_in = None
 from django.conf import settings
 from django.db.models import F
 from django.utils import timezone
@@ -16,11 +20,9 @@ except Exception:  # pragma: no cover
 try:
     from allauth.account.signals import user_signed_up
     from allauth.account.signals import email_confirmed
-    from allauth.account.signals import user_logged_in
 except Exception:  # pragma: no cover
     user_signed_up = None
     email_confirmed = None
-    user_logged_in = None
 
 from .tasks import send_welcome_email
 
@@ -154,8 +156,8 @@ if user_signed_up is not None:
             pass
 
 
-if user_logged_in is not None:
-    @receiver(user_logged_in)
+if django_user_logged_in is not None:
+    @receiver(django_user_logged_in)
     def show_welcome_popup_on_login(request, user, **kwargs):
         try:
             if request is None:

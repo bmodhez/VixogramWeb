@@ -4,6 +4,7 @@ from django.conf import settings
 from django.conf.urls.static import static
 from django.views.static import serve as static_serve
 from django.views.generic.base import RedirectView
+from django.views.generic import TemplateView
 from django.templatetags.static import static as static_url
 from a_core.firebase_views import firebase_messaging_sw
 from a_core.maintenance_views import maintenance_page_view, maintenance_status_view, maintenance_toggle_view
@@ -18,6 +19,17 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('firebase-messaging-sw.js', firebase_messaging_sw, name='firebase-messaging-sw'),
     path('pricing/', pricing_view, name='pricing'),
+
+    # Public footer pages
+    path('about/', TemplateView.as_view(template_name='pages/about.html'), name='about'),
+    path('contact/', TemplateView.as_view(template_name='pages/contact.html'), name='contact'),
+    path('help/', TemplateView.as_view(template_name='pages/help_center.html'), name='help-center'),
+    path('report-abuse/', TemplateView.as_view(template_name='pages/report_abuse.html'), name='report-abuse'),
+    path('community-guidelines/', TemplateView.as_view(template_name='pages/community_guidelines.html'), name='community-guidelines'),
+    path('privacy/', TemplateView.as_view(template_name='legal/privacy_policy.html'), name='privacy-policy'),
+    path('terms/', TemplateView.as_view(template_name='legal/terms_of_service.html'), name='terms-of-service'),
+    path('cookies/', TemplateView.as_view(template_name='legal/cookie_policy.html'), name='cookie-policy'),
+
     path('', include('a_rtchat.urls')),
     path('accounts/email/', CooldownEmailView.as_view(), name='account_email'),
     path('accounts/', include('allauth.urls')),

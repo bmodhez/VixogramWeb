@@ -20,10 +20,22 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
     <script src="https://unpkg.com/hyperscript.org@0.9.12"></script>
+    <script src="{% static 'js/profile.js' %}"></script>
 </head>
 <body class="min-h-screen flex flex-col text-white antialiased tracking-tight bg-gradient-to-b from-gray-950 via-gray-900 to-gray-950 {% block body_class %}{% endblock %}{% if request.resolver_match and request.resolver_match.url_name|default:''|slice:':8' == 'account_' %} vixo-auth-page{% endif %}">
     <audio id="notif_sound" preload="auto" class="hidden" src="{% static 'notification.mp3' %}"></audio>
     <audio id="incoming_sound" preload="auto" class="hidden" src="{% static 'incoming.wav' %}"></audio>
+    {% if request.resolver_match and request.resolver_match.url_name|default:''|slice:':8' == 'account_' %}
+        <!-- Auth progress (hidden by default; shown by account.js on submit/nav). -->
+        <div id="vixo-auth-progress" class="fixed top-0 left-0 right-0 z-[60] hidden pointer-events-none">
+            <div class="h-[3px] bg-transparent overflow-hidden">
+                <div id="vixo-auth-progress-bar" class="h-full w-0 bg-gradient-to-r from-red-500 via-fuchsia-500 to-red-500 transition-[width] duration-150 ease-out"></div>
+            </div>
+            <div id="vixo-auth-progress-pill" class="absolute top-2 left-1/2 -translate-x-1/2 hidden rounded-full border border-white/10 bg-gray-900/80 px-2.5 py-1 text-[11px] text-gray-100 shadow-lg shadow-black/30">
+                <span id="vixo-auth-progress-text">0%</span>
+            </div>
+        </div>
+    {% endif %}
     <nav class="vixo-topbar sticky top-0 z-50 bg-gray-900/80 backdrop-blur border-b border-gray-800">
         <div class="w-full max-w-7xl mx-auto px-4 sm:px-6 py-2 flex flex-wrap items-center justify-between gap-3">
             <a href="/" class="vixo-brand inline-flex items-center gap-2 hover:opacity-95 transition-all duration-200 ease-out hover:-translate-y-0.5 active:translate-y-0">
@@ -120,7 +132,7 @@
                             </div>
                         </div>
                     </div>
-                    <div class="relative">
+                    <div class="relative flex items-center gap-2">
                         <button
                             type="button"
                             id="user_menu_btn"
@@ -133,7 +145,17 @@
                             <span class="hidden sm:inline text-sm text-gray-200 font-semibold">{{ user.username }}</span>
                         </button>
 
-                        <div id="user_menu" class="hidden fixed left-1/2 -translate-x-1/2 top-20 w-[min(18rem,calc(100vw-2rem))] sm:absolute sm:left-auto sm:translate-x-0 sm:top-auto sm:right-0 sm:mt-2 rounded-2xl border border-gray-800 bg-gray-900/95 shadow-2xl shadow-black/30 overflow-hidden" role="menu">
+                        <div
+                            id="nav_total_users"
+                            class="hidden sm:flex items-center gap-2 rounded-full border border-indigo-500/20 bg-gradient-to-r from-indigo-500/10 via-fuchsia-500/10 to-sky-500/10 px-3 py-1 text-[11px] font-semibold text-indigo-200 whitespace-nowrap"
+                            aria-label="Total users"
+                        >
+                            <span class="inline-flex h-4 w-4 items-center justify-center rounded-full bg-indigo-500/20 text-indigo-100">👥</span>
+                            <span id="total-users-count" class="font-extrabold">{{ TOTAL_USERS_COUNT|default:0 }}</span>
+                            <span class="text-indigo-100/90">users</span>
+                        </div>
+
+                        <div id="user_menu" class="hidden fixed left-1/2 -translate-x-1/2 top-20 w-[min(18rem,calc(100vw-2rem))] sm:absolute sm:left-auto sm:translate-x-0 sm:top-full sm:right-0 sm:mt-2 rounded-2xl border border-gray-800 bg-gray-900/95 shadow-2xl shadow-black/30 max-h-[calc(100vh-7rem)] overflow-x-hidden overflow-y-auto" role="menu">
                             <a href="{% url 'profile' %}" class="block px-4 py-3 text-sm text-gray-200 hover:bg-gray-800/60 transition-all duration-200 ease-out hover:-translate-y-0.5 active:translate-y-0">
                                 View profile
                             </a>
@@ -255,19 +277,23 @@
     {% with urlname=request.resolver_match.url_name|default:'' %}
     <div class="w-full flex-1">
         <div class="w-full {% if urlname|slice:':8' == 'account_' %}px-0 py-0{% else %}px-4 sm:px-6 py-5 sm:py-6{% endif %}">
-            <div class="vixo-site-grid grid grid-cols-1 min-[1536px]:grid-cols-[max-content_minmax(0,80rem)_max-content] gap-3 items-start justify-center">
+            <div class="vixo-site-grid grid grid-cols-1 {% if urlname|slice:':8' != 'account_' %}{% if user.is_authenticated and user.profile.is_founder_club %}{% else %}xl:grid-cols-[max-content_minmax(0,80rem)_max-content]{% endif %}{% endif %} gap-3 items-start justify-center">
                 <!-- Side ad slots (in-flow so they never overlap content) -->
                 {% if urlname|slice:':8' != 'account_' %}
-                    <aside class="hidden min-[1536px]:block">
-                        <div class="sticky top-24">
-                            <div class="rounded-2xl border border-gray-800 bg-gray-900/50 p-3 text-center">
-                                <div class="text-[10px] uppercase tracking-widest text-gray-400">Advertisement</div>
-                                <div class="mt-3 min-h-[600px] min-w-[160px] rounded-xl border border-gray-800 bg-gray-950/40 flex items-center justify-center text-xs text-gray-500">
-                                    Place Ad (160×600)
+                    {% if user.is_authenticated and user.profile.is_founder_club %}
+                        {# Founder Club: no ads #}
+                    {% else %}
+                        <aside class="hidden xl:block">
+                            <div class="sticky top-24">
+                                <div class="rounded-2xl border border-gray-800 bg-gray-900/50 p-3 text-center">
+                                    <div class="text-[10px] uppercase tracking-widest text-gray-400">Advertisement</div>
+                                    <div class="mt-3 min-h-[600px] min-w-[160px] rounded-xl border border-gray-800 bg-gray-950/40 flex items-center justify-center text-xs text-gray-500">
+                                        Place Ad (160×600)
+                                    </div>
                                 </div>
                             </div>
-                        </div>
-                    </aside>
+                        </aside>
+                    {% endif %}
                 {% endif %}
 
                 <main class="min-w-0">
@@ -276,21 +302,120 @@
                 </main>
 
                 {% if urlname|slice:':8' != 'account_' %}
-                    <aside class="hidden min-[1536px]:block">
-                        <div class="sticky top-24">
-                            <div class="rounded-2xl border border-gray-800 bg-gray-900/50 p-3 text-center">
-                                <div class="text-[10px] uppercase tracking-widest text-gray-400">Advertisement</div>
-                                <div class="mt-3 min-h-[600px] min-w-[160px] rounded-xl border border-gray-800 bg-gray-950/40 flex items-center justify-center text-xs text-gray-500">
-                                    Place Ad (160×600)
+                    {% if user.is_authenticated and user.profile.is_founder_club %}
+                        {# Founder Club: no ads #}
+                    {% else %}
+                        <aside class="hidden xl:block">
+                            <div class="sticky top-24">
+                                <div class="rounded-2xl border border-gray-800 bg-gray-900/50 p-3 text-center">
+                                    <div class="text-[10px] uppercase tracking-widest text-gray-400">Advertisement</div>
+                                    <div class="mt-3 min-h-[600px] min-w-[160px] rounded-xl border border-gray-800 bg-gray-950/40 flex items-center justify-center text-xs text-gray-500">
+                                        Place Ad (160×600)
+                                    </div>
                                 </div>
                             </div>
-                        </div>
-                    </aside>
+                        </aside>
+                    {% endif %}
                 {% endif %}
             </div>
         </div>
     </div>
     {% endwith %}
+
+    <footer class="mt-auto w-full">
+        <div class="w-full">
+            <div class="rounded-t-3xl border border-gray-800 bg-gray-900/80 backdrop-blur-md shadow-2xl shadow-black/25 overflow-hidden">
+                <div aria-hidden="true" class="h-[2px] w-full bg-gradient-to-r from-[#8E2DE2] via-emerald-400/70 to-[#4A00E0]"></div>
+
+                <div class="relative mx-auto w-full max-w-7xl px-4 sm:px-6 py-10">
+                    <div aria-hidden="true" class="pointer-events-none absolute -top-24 -left-20 h-72 w-72 rounded-full bg-[#8E2DE2]/15 blur-3xl"></div>
+                    <div aria-hidden="true" class="pointer-events-none absolute -bottom-28 -right-16 h-80 w-80 rounded-full bg-emerald-400/10 blur-3xl"></div>
+
+                    {% if urlname|slice:':8' != 'account_' %}
+                        {% if user.is_authenticated and user.profile.is_founder_club %}
+                            {# Founder Club: no ads #}
+                        {% else %}
+                            <!-- Footer ad slot (mobile + desktop) -->
+                            <div class="relative mb-10">
+                                <div class="rounded-2xl border border-gray-800 bg-gray-950/30 p-4 text-center">
+                                    <div class="text-[10px] uppercase tracking-widest text-gray-400">Advertisement</div>
+
+                                    <!-- Mobile banner -->
+                                    <div class="mt-3 sm:hidden">
+                                        <div class="min-h-[100px] w-full rounded-xl border border-gray-800 bg-gray-950/40 flex items-center justify-center text-xs text-gray-500">
+                                            Place Ad (320×100)
+                                        </div>
+                                    </div>
+
+                                    <!-- Desktop banner -->
+                                    <div class="mt-3 hidden sm:block">
+                                        <div class="min-h-[90px] w-full max-w-[728px] mx-auto rounded-xl border border-gray-800 bg-gray-950/40 flex items-center justify-center text-xs text-gray-500">
+                                            Place Ad (728×90)
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        {% endif %}
+                    {% endif %}
+
+                    <div class="relative grid gap-10 sm:grid-cols-2 lg:grid-cols-4">
+                        <div>
+                            <div class="flex items-center gap-3">
+                                <img src="{% static 'vixologo.png' %}" alt="Vixogram" class="h-10 w-auto object-contain" />
+                                <div class="text-lg font-extrabold tracking-wide text-white">Vixogram</div>
+                            </div>
+                            <div class="mt-3 text-sm font-semibold text-white">Chat. Call. Connect.</div>
+                            <p class="mt-2 text-sm text-gray-300 leading-6">
+                                Make new friends and connect with people from all over the world <span aria-hidden="true">🌍</span>
+                            </p>
+                        </div>
+
+                        <div>
+                            <div class="text-sm font-extrabold tracking-wide text-white">Quick Links</div>
+                            <ul class="mt-3 space-y-2 text-sm">
+                                <li><a href="/" class="text-gray-300 hover:text-white transition">Home</a></li>
+                                <li><a href="{% url 'account_login' %}" class="text-gray-300 hover:text-white transition">Login</a></li>
+                                <li><a href="{% url 'account_signup' %}" class="text-gray-300 hover:text-white transition">Sign Up</a></li>
+                                <li><a href="{% url 'pricing' %}" class="text-gray-300 hover:text-white transition">Pricing</a></li>
+                            </ul>
+                        </div>
+
+                        <div>
+                            <div class="text-sm font-extrabold tracking-wide text-white">Support <span class="ml-1" aria-hidden="true">🛡</span></div>
+                            <ul class="mt-3 space-y-2 text-sm">
+                                <li><a href="{% url 'contact' %}" class="text-gray-300 hover:text-white transition">Contact Us</a></li>
+                                <li><a href="{% url 'help-center' %}" class="text-gray-300 hover:text-white transition">Help Center</a></li>
+                                <li><a href="{% url 'report-abuse' %}" class="text-gray-300 hover:text-white transition">Report Abuse</a></li>
+                                <li><a href="{% url 'community-guidelines' %}" class="text-gray-300 hover:text-white transition">Community Guidelines</a></li>
+                            </ul>
+                        </div>
+
+                        <div>
+                            <div class="text-sm font-extrabold tracking-wide text-white">Legal</div>
+                            <ul class="mt-3 space-y-2 text-sm">
+                                <li><a href="{% url 'privacy-policy' %}" class="text-gray-300 hover:text-white transition">Privacy Policy</a></li>
+                                <li><a href="{% url 'terms-of-service' %}" class="text-gray-300 hover:text-white transition">Terms of Service</a></li>
+                                <li><a href="{% url 'cookie-policy' %}" class="text-gray-300 hover:text-white transition">Cookie Policy</a></li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="relative mt-10 pt-6 border-t border-gray-800 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div class="text-xs sm:text-sm text-gray-300">
+                            © {% now "Y" %} <span class="font-semibold text-white">Vixogram</span>. All rights reserved.
+                        </div>
+                        <div class="text-xs sm:text-sm text-gray-300">
+                            Built for fun, friendship, and safe chatting <span aria-hidden="true">💬</span> <span class="mx-1 text-gray-600" aria-hidden="true">•</span> Made with <span aria-hidden="true">❤️</span> in India
+                        </div>
+                    </div>
+
+                    <div class="relative mt-3 text-xs text-gray-400">
+                        Let’s keep the chat friendly, positive, and spam-free.
+                    </div>
+                </div>
+            </div>
+        </div>
+    </footer>
 
     <!-- Global modal root (used for HTMX overlays like profile preview) -->
     <div id="global_modal_root" class="fixed inset-0 z-[60] hidden"></div>
@@ -304,6 +429,9 @@
             from { opacity: 0; transform: translateY(8px) scale(0.96); }
             to { opacity: 1; transform: translateY(0) scale(1); }
         }
+        /* Safety: if the global modal root is accidentally shown while empty,
+           it would block all clicks. Keep it non-rendered until it has content. */
+        #global_modal_root:empty { display: none !important; }
         .vixo-modal-overlay { animation: vixoFadeIn 140ms ease-out both; }
         .vixo-modal-card { animation: vixoPopIn 170ms ease-out both; }
     </style>
@@ -527,7 +655,7 @@
 
     {% if SHOW_WELCOME_POPUP %}
     <div id="welcome-modal" class="fixed inset-0 z-[70]" aria-hidden="false" role="dialog" aria-modal="true">
-        <div class="absolute inset-0 bg-black/60 vixo-modal-overlay" data-welcome-backdrop></div>
+        <div class="absolute inset-0 bg-black/60 vixo-modal-overlay"></div>
         <div class="relative min-h-full flex items-center justify-center p-6 pointer-events-none">
             <div class="w-full max-w-md pointer-events-auto vixo-modal-card">
                 <div class="relative overflow-hidden rounded-2xl border border-white/10 bg-gray-900/70 backdrop-blur shadow-2xl">
@@ -535,26 +663,39 @@
                     <div class="relative p-6">
                         <div class="flex items-start justify-between gap-4">
                             <div>
-                                <div class="text-xl font-extrabold text-white">Welcome to Vixogram</div>
-                                <div class="mt-2 text-sm text-gray-200/90">By using this platform, you agree to:</div>
+                                <div class="text-xl font-extrabold text-white">Yo! Welcome to Vixogram 🔥</div>
+                                <div class="mt-2 text-sm text-gray-200/90">Be cool. 😎 No spamming. No toxic stuff.</div>
+                                <div class="mt-1 text-sm text-gray-200/90">Let’s keep this place fun for everyone 🤝</div>
                             </div>
-                            <button
-                                type="button"
+                            <a
+                                href="{{ request.get_full_path }}"
                                 id="welcome-close"
-                                class="shrink-0 rounded-lg border border-white/10 bg-white/20 px-3 py-2 text-sm text-gray-100 hover:bg-white/25 transition-colors"
-                                aria-label="Close"
+                                class="shrink-0 inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-white/20 text-base text-gray-100 hover:bg-white/25 transition-colors"
+                                aria-label="Close welcome"
+                                role="button"
                             >
-                                Close
-                            </button>
+                                ×
+                            </a>
                         </div>
 
                         <ul class="mt-4 space-y-2 text-sm text-gray-100/90">
-                            <li>• Keep chats respectful</li>
-                            <li>• Avoid spam &amp; harmful content</li>
-                            <li>• Help maintain a positive environment</li>
+                            <li>✅ No spam</li>
+                            <li>✅ No abusive language</li>
+                            <li>✅ No NSFW</li>
+                            <li>✅ Respect all users</li>
                         </ul>
 
-                        <div class="mt-5 text-sm text-gray-100/90">Let’s build a better community together 🤝</div>
+                        <div class="mt-5">
+                            <a
+                                href="{{ request.get_full_path }}"
+                                id="welcome-go"
+                                class="w-full inline-flex items-center justify-center bg-gradient-to-r from-emerald-500 via-teal-500 to-sky-500 hover:from-emerald-400 hover:via-teal-400 hover:to-sky-400 text-white font-bold py-2.5 px-6 rounded-full transition-colors"
+                                role="button"
+                            >
+                                Let’s Go 🚀
+                            </a>
+                            <div class="mt-2 text-[11px] text-gray-400 text-center">Violation may lead to a permanent ban.</div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -566,6 +707,8 @@
             const modal = document.getElementById('welcome-modal');
             if (!modal) return;
             const closeBtn = document.getElementById('welcome-close');
+            const goBtn = document.getElementById('welcome-go');
+            let timer = null;
 
             const close = () => {
                 try { document.body.classList.remove('overflow-hidden'); } catch {}
@@ -574,19 +717,22 @@
 
             try { document.body.classList.add('overflow-hidden'); } catch {}
 
-            if (closeBtn) closeBtn.addEventListener('click', (e) => { e.preventDefault(); close(); });
+            const onUserClose = (e) => {
+                try { if (e) e.preventDefault(); } catch {}
+                try { if (timer) clearTimeout(timer); } catch {}
+                timer = null;
+                close();
+            };
 
-            modal.addEventListener('click', (e) => {
-                const t = e && e.target;
-                if (t && t.hasAttribute && t.hasAttribute('data-welcome-backdrop')) close();
-            });
+            if (closeBtn) closeBtn.addEventListener('click', onUserClose);
+            if (goBtn) goBtn.addEventListener('click', onUserClose);
 
             document.addEventListener('keydown', (e) => {
                 if (e.key === 'Escape') close();
             });
 
             // Auto close after 10 seconds
-            setTimeout(close, 10000);
+            timer = setTimeout(close, 10000);
         })();
     </script>
     {% endif %}
@@ -603,7 +749,14 @@
         "maintenancePageUrl": "{% url 'maintenance' %}",
         "maintenanceStatusUrl": "{% url 'maintenance-status' %}",
         "maintenanceToggleUrl": "{% url 'maintenance-toggle' %}",
-        "mobileAdsEnabled": {% if MOBILE_ADS_ENABLED %}true{% else %}false{% endif %},
+        "mobileAdsEnabled":
+            {% if user.is_authenticated and user.profile.is_founder_club %}
+                false
+            {% elif MOBILE_ADS_ENABLED %}
+                true
+            {% else %}
+                false
+            {% endif %},
         "mobileAds": {
             "chatList": {
                 "title": "{{ MOBILE_AD_CHAT_LIST.title|default:''|escapejs }}",

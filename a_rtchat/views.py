@@ -1,3 +1,4 @@
+import csv
 import json
 from datetime import timedelta
 from urllib.parse import urlparse
@@ -27,6 +28,7 @@ from a_users.models import Profile
 from a_users.models import FCMToken
 from a_users.models import UserReport
 from a_users.models import SupportEnquiry
+from a_users.models import BetaFeature
 from .models import *
 from .forms import *
 from .agora import build_rtc_token
@@ -427,14 +429,29 @@ def chat_view(request, chatroom_name='public-chat'):
                 status=404,
             )
     
-    # Show the latest N messages (default 900) but render them oldest -> newest
-    # (so refresh doesn't invert order).
-    initial_limit = int(getattr(settings, 'CHAT_MAX_MESSAGES_PER_ROOM', 900))
+    # UI: render only a small slice initially to avoid freezing the browser
+    # when a room has a long history. Retention is handled separately via
+    # settings.CHAT_MAX_MESSAGES_PER_ROOM.
+    initial_limit = int(getattr(settings, 'CHAT_INITIAL_MESSAGES', 60))
     if initial_limit <= 0:
-        initial_limit = 900
-    latest_messages = list(chat_group.chat_messages.order_by('-created')[:initial_limit])
+        initial_limit = 60
+    # Hard cap for safety.
+    initial_limit = max(10, min(initial_limit, 200))
+
+    # Fetch latest by id (fast, stable chronological order) then reverse.
+    latest_messages = list(chat_group.chat_messages.order_by('-id')[:initial_limit])
     latest_messages.reverse()
     chat_messages = latest_messages
+
+    has_older_messages = False
+    try:
+        if chat_messages:
+            oldest_id = int(getattr(chat_messages[0], 'id', 0) or 0)
+            if oldest_id:
+                has_older_messages = chat_group.chat_messages.filter(id__lt=oldest_id).exists()
+    except Exception:
+        has_older_messages = False
+
     _attach_reaction_pills(chat_messages, request.user)
     _attach_one_time_view_flags(chat_messages, request.user)
     form = ChatmessageCreateForm()
@@ -631,12 +648,17 @@ def chat_view(request, chatroom_name='public-chat'):
             )
 
             # Retention: keep only the newest messages per room (best-effort)
-            try:
-                from a_rtchat.retention import trim_chat_group_messages
+            # Apply only to public/group chats, not private chats.
+            if not bool(getattr(chat_group, 'is_private', False)):
+                try:
+                    from a_rtchat.retention import trim_chat_group_messages
 
-                trim_chat_group_messages(chat_group_id=chat_group.id, keep_last=int(getattr(settings, 'CHAT_MAX_MESSAGES_PER_ROOM', 900)))
-            except Exception:
-                pass
+                    trim_chat_group_messages(
+                        chat_group_id=chat_group.id,
+                        keep_last=int(getattr(settings, 'CHAT_MAX_MESSAGES_PER_ROOM', 300)),
+                    )
+                except Exception:
+                    pass
 
             # Recompute counters after saving the upload so the UI can update without refresh.
             uploads_used = _uploads_used_today(chat_group, request.user)
@@ -1323,15 +1345,17 @@ def chat_view(request, chatroom_name='public-chat'):
                 return resp
 
             # Retention: keep only the newest messages per room (best-effort)
-            try:
-                from a_rtchat.retention import trim_chat_group_messages
+            # Apply only to public/group chats, not private chats.
+            if not bool(getattr(chat_group, 'is_private', False)):
+                try:
+                    from a_rtchat.retention import trim_chat_group_messages
 
-                trim_chat_group_messages(
-                    chat_group_id=chat_group.id,
-                    keep_last=int(getattr(settings, 'CHAT_MAX_MESSAGES_PER_ROOM', 900)),
-                )
-            except Exception:
-                pass
+                    trim_chat_group_messages(
+                        chat_group_id=chat_group.id,
+                        keep_last=int(getattr(settings, 'CHAT_MAX_MESSAGES_PER_ROOM', 300)),
+                    )
+                except Exception:
+                    pass
 
             # Public chat bot (Natasha): reply occasionally, async.
             try:
@@ -1525,6 +1549,7 @@ def chat_view(request, chatroom_name='public-chat'):
 
     context = {
         'chat_messages' : chat_messages, 
+        'has_older_messages': has_older_messages,
         'form' : form,
         'other_user' : other_user,
         'other_last_read_id': other_last_read_id,
@@ -1607,6 +1632,7 @@ def chat_view(request, chatroom_name='public-chat'):
         'currentUsername': request.user.username,
         'otherLastReadId': int(other_last_read_id or 0),
         'pollUrl': reverse('chat-poll', args=[chatroom_name]),
+        'olderUrl': reverse('chat-older', args=[chatroom_name]),
         'inviteUrl': reverse('chat-call-invite', args=[chatroom_name]),
         'tokenUrl': reverse('agora-token', args=[chatroom_name]),
         'presenceUrl': reverse('chat-call-presence', args=[chatroom_name]),
@@ -1715,6 +1741,7 @@ def chat_config_view(request, chatroom_name):
         'currentUsername': request.user.username,
         'otherLastReadId': other_last_read_id,
         'pollUrl': reverse('chat-poll', args=[chatroom_name]),
+        'olderUrl': reverse('chat-older', args=[chatroom_name]),
         'inviteUrl': reverse('chat-call-invite', args=[chatroom_name]),
         'tokenUrl': reverse('agora-token', args=[chatroom_name]),
         'presenceUrl': reverse('chat-call-presence', args=[chatroom_name]),
@@ -1735,6 +1762,105 @@ def chat_config_view(request, chatroom_name):
         'giphyLimit': 30,
     }
     return JsonResponse(data)
+
+
+@login_required
+def chat_older_view(request, chatroom_name):
+    """Return older messages before a given id (paged history fetch)."""
+    if chatroom_name == 'public-chat':
+        chat_group, _created = ChatGroup.objects.get_or_create(group_name=chatroom_name)
+    else:
+        chat_group = get_object_or_404(ChatGroup, group_name=chatroom_name)
+
+    # Permission checks (same intent as chat_view/chat_poll_view)
+    if _is_chat_blocked(request.user) and getattr(chat_group, 'is_private', False):
+        raise Http404()
+    if chat_group.is_private and request.user not in chat_group.members.all():
+        raise Http404()
+    if chat_group.groupchat_name and request.user not in chat_group.members.all():
+        if _is_chat_blocked(request.user):
+            pass
+        else:
+            email_verification = str(getattr(settings, 'ACCOUNT_EMAIL_VERIFICATION', 'optional')).lower()
+            if email_verification == 'mandatory':
+                if request.user.emailaddress_set.filter(verified=True).exists():
+                    chat_group.members.add(request.user)
+                else:
+                    return JsonResponse({'messages_html': '', 'oldest_id': request.GET.get('before'), 'has_more': False}, status=403)
+            else:
+                chat_group.members.add(request.user)
+
+    # Rate limit history fetches (reuse poll limits by default).
+    rl = check_rate_limit(
+        make_key('chat_older', chat_group.group_name, request.user.id),
+        limit=int(getattr(settings, 'CHAT_POLL_RATE_LIMIT', 240)),
+        period_seconds=int(getattr(settings, 'CHAT_POLL_RATE_PERIOD', 60)),
+    )
+    if not rl.allowed:
+        try:
+            before_id = int(request.GET.get('before', '0'))
+        except ValueError:
+            before_id = 0
+        return JsonResponse({'messages_html': '', 'oldest_id': before_id, 'has_more': True})
+
+    try:
+        before_id = int(request.GET.get('before', '0'))
+    except ValueError:
+        before_id = 0
+    if before_id <= 0:
+        return JsonResponse({'messages_html': '', 'oldest_id': before_id, 'has_more': False})
+
+    page_size = int(getattr(settings, 'CHAT_HISTORY_PAGE_SIZE', 50))
+    if page_size <= 0:
+        page_size = 50
+    page_size = max(10, min(page_size, 200))
+
+    qs = chat_group.chat_messages.filter(id__lt=before_id).order_by('-id')
+    batch = list(qs[:page_size])
+    if not batch:
+        return JsonResponse({'messages_html': '', 'oldest_id': before_id, 'has_more': False})
+
+    batch.reverse()
+    _attach_reaction_pills(batch, request.user)
+    _attach_one_time_view_flags(batch, request.user)
+
+    verified_user_ids = set()
+    try:
+        author_ids = {getattr(m, 'author_id', None) for m in (batch or [])}
+        author_ids = {x for x in author_ids if x}
+        author_ids.add(getattr(request.user, 'id', None))
+        verified_user_ids = get_verified_user_ids(author_ids)
+    except Exception:
+        verified_user_ids = set()
+
+    parts = []
+    prev = None
+    for message in batch:
+        parts.append(
+            render(
+                request,
+                'a_rtchat/chat_message.html',
+                {
+                    'message': message,
+                    'user': request.user,
+                    'chat_group': chat_group,
+                    'reaction_emojis': CHAT_REACTION_EMOJIS,
+                    'verified_user_ids': verified_user_ids,
+                    'prev_message': prev,
+                },
+            ).content.decode('utf-8')
+        )
+        prev = message
+
+    oldest_id = int(getattr(batch[0], 'id', 0) or 0)
+    has_more = False
+    try:
+        if oldest_id:
+            has_more = chat_group.chat_messages.filter(id__lt=oldest_id).exists()
+    except Exception:
+        has_more = False
+
+    return JsonResponse({'messages_html': ''.join(parts), 'oldest_id': oldest_id, 'has_more': has_more})
 
 
 @login_required
@@ -2244,15 +2370,17 @@ def chat_file_upload(request, chatroom_name):
     )
 
     # Retention: keep only the newest messages per room (best-effort)
-    try:
-        from a_rtchat.retention import trim_chat_group_messages
+    # Apply only to public/group chats, not private chats.
+    if not bool(getattr(chat_group, 'is_private', False)):
+        try:
+            from a_rtchat.retention import trim_chat_group_messages
 
-        trim_chat_group_messages(
-            chat_group_id=chat_group.id,
-            keep_last=int(getattr(settings, 'CHAT_MAX_MESSAGES_PER_ROOM', 900)),
-        )
-    except Exception:
-        pass
+            trim_chat_group_messages(
+                chat_group_id=chat_group.id,
+                keep_last=int(getattr(settings, 'CHAT_MAX_MESSAGES_PER_ROOM', 300)),
+            )
+        except Exception:
+            pass
 
     channel_layer = get_channel_layer()
     event = {
@@ -2507,6 +2635,10 @@ def message_edit_view(request, message_id: int):
     if chat_group.groupchat_name and request.user not in chat_group.members.all():
         raise Http404()
 
+    # GIF messages are not editable (only delete).
+    if (message.body or '').strip().startswith('[GIF]'):
+        return JsonResponse({'error': 'GIF messages cannot be edited.'}, status=403)
+
     body = (request.POST.get('body') or '').strip()
     if not body:
         return JsonResponse({'error': 'Message cannot be empty'}, status=400)
@@ -2660,6 +2792,94 @@ def admin_users_view(request):
         'page_obj': page_obj,
         'paginator': paginator,
         'is_paginated': page_obj.has_other_pages(),
+    })
+
+
+@login_required
+def admin_users_export_view(request):
+    if not request.user.is_staff:
+        raise Http404()
+
+    q = (request.GET.get('q') or '').strip()
+    users = User.objects.all().order_by('username')
+    if q:
+        users = users.filter(
+            Q(username__icontains=q)
+            | Q(email__icontains=q)
+            | Q(first_name__icontains=q)
+            | Q(last_name__icontains=q)
+        )
+
+    limit = int(getattr(settings, 'ADMIN_USERS_EXPORT_LIMIT', 50000))
+    users = users[: max(1, limit)]
+
+    response = HttpResponse(content_type='text/csv; charset=utf-8')
+    response['Content-Disposition'] = 'attachment; filename="users.csv"'
+    response['Cache-Control'] = 'no-store'
+
+    # Excel compatibility for UTF-8.
+    response.write('\ufeff')
+
+    writer = csv.writer(response)
+    writer.writerow(['username', 'email'])
+    for username, email in users.values_list('username', 'email').iterator(chunk_size=2000):
+        writer.writerow([username or '', email or ''])
+    return response
+
+
+@login_required
+def admin_beta_features_view(request):
+    if not request.user.is_staff:
+        raise Http404()
+
+    if request.method == 'POST':
+        action = (request.POST.get('action') or '').strip().lower()
+
+        if action == 'create':
+            slug = (request.POST.get('slug') or '').strip().lower()
+            title = (request.POST.get('title') or '').strip()
+            description = (request.POST.get('description') or '').strip()
+            requires_founder_club = bool(request.POST.get('requires_founder_club'))
+
+            if not slug or not title:
+                messages.error(request, 'Slug and title are required')
+                return redirect('admin-beta-features')
+
+            obj, created = BetaFeature.objects.get_or_create(
+                slug=slug,
+                defaults={
+                    'title': title,
+                    'description': description,
+                    'requires_founder_club': requires_founder_club,
+                },
+            )
+            if created:
+                messages.success(request, f'Created beta feature: {slug}')
+            else:
+                messages.error(request, f'Beta feature already exists: {slug}')
+            return redirect('admin-beta-features')
+
+        if action in {'toggle_enabled', 'toggle_founder_only'}:
+            slug = (request.POST.get('slug') or '').strip().lower()
+            if not slug:
+                raise Http404()
+            obj = get_object_or_404(BetaFeature, slug=slug)
+            if action == 'toggle_enabled':
+                obj.is_enabled = not obj.is_enabled
+                obj.save(update_fields=['is_enabled', 'updated_at'])
+                messages.success(request, f"{'Enabled' if obj.is_enabled else 'Disabled'}: {obj.slug}")
+            else:
+                obj.requires_founder_club = not obj.requires_founder_club
+                obj.save(update_fields=['requires_founder_club', 'updated_at'])
+                messages.success(
+                    request,
+                    f"{'Founder-only' if obj.requires_founder_club else 'Open to all'}: {obj.slug}",
+                )
+            return redirect('admin-beta-features')
+
+    features = BetaFeature.objects.all().order_by('slug')
+    return render(request, 'a_rtchat/admin_beta_features.html', {
+        'features': features,
     })
 
 
@@ -3514,12 +3734,17 @@ def call_event_view(request, chatroom_name):
     )
 
     # Retention: keep only the newest messages per room (best-effort)
-    try:
-        from a_rtchat.retention import trim_chat_group_messages
+    # Apply only to public/group chats, not private chats.
+    if not bool(getattr(chat_group, 'is_private', False)):
+        try:
+            from a_rtchat.retention import trim_chat_group_messages
 
-        trim_chat_group_messages(chat_group_id=chat_group.id, keep_last=int(getattr(settings, 'CHAT_MAX_MESSAGES_PER_ROOM', 900)))
-    except Exception:
-        pass
+            trim_chat_group_messages(
+                chat_group_id=chat_group.id,
+                keep_last=int(getattr(settings, 'CHAT_MAX_MESSAGES_PER_ROOM', 300)),
+            )
+        except Exception:
+            pass
 
     # Update call state
     if action == 'start':

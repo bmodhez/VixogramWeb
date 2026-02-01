@@ -1,0 +1,32 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<wrapper class="block max-w-4xl mx-auto my-10 px-6">
+    <div class="rounded-3xl border border-gray-800 bg-gray-900/50 shadow-2xl shadow-black/20 overflow-hidden">
+        <div aria-hidden="true" class="h-[2px] w-full bg-gradient-to-r from-[#8E2DE2] via-emerald-400/70 to-[#4A00E0]"></div>
+        <div class="p-8 sm:p-10">
+            <h1 class="text-2xl sm:text-3xl font-extrabold text-white">About Vixogram</h1>
+            <p class="mt-3 text-gray-300 leading-7">
+                Vixogram is built for fun, friendship, and safe chatting. We’re focused on simple, fast chat rooms and a clean experience.
+            </p>
+
+            <div class="mt-8 grid gap-4 sm:grid-cols-2">
+                <div class="rounded-2xl border border-gray-800 bg-gray-950/30 p-5">
+                    <div class="text-sm font-bold text-emerald-300">Mission</div>
+                    <div class="mt-2 text-sm text-gray-300">Help people connect and build communities.</div>
+                </div>
+                <div class="rounded-2xl border border-gray-800 bg-gray-950/30 p-5">
+                    <div class="text-sm font-bold text-indigo-300">Safety</div>
+                    <div class="mt-2 text-sm text-gray-300">We take abuse reports seriously and keep improving moderation.</div>
+                </div>
+            </div>
+
+            <div class="mt-8 flex flex-wrap gap-3">
+                <a href="/" class="bg-gray-800 hover:bg-gray-700 text-white rounded-xl px-4 py-2 transition">Go to chat</a>
+                <a href="{% url 'contact' %}" class="bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl px-4 py-2 transition">Contact</a>
+                <a href="{% url 'pricing' %}" class="bg-gray-800 hover:bg-gray-700 text-white rounded-xl px-4 py-2 transition">Pricing</a>
+            </div>
+        </div>
+    </div>
+</wrapper>
+{% endblock %}

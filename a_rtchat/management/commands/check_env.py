@@ -218,6 +218,29 @@ class Command(BaseCommand):
                 else:
                     failed_optional += 1
 
+        # Helpful computed settings (no secrets)
+        self.stdout.write(self.style.MIGRATE_HEADING("\nEmail (computed)"))
+        try:
+            backend = (getattr(settings, "EMAIL_BACKEND", "") or "").strip()
+            host = (getattr(settings, "EMAIL_HOST", "") or "").strip()
+            port = getattr(settings, "EMAIL_PORT", None)
+            use_tls = bool(getattr(settings, "EMAIL_USE_TLS", False))
+            use_ssl = bool(getattr(settings, "EMAIL_USE_SSL", False))
+            from_email = (getattr(settings, "DEFAULT_FROM_EMAIL", "") or "").strip()
+            user_set = bool(email_user)
+            pass_set = bool(email_pass)
+
+            self.stdout.write(f"EMAIL_BACKEND={backend or '(unset)'}")
+            self.stdout.write(f"EMAIL_HOST={host or '(unset)'}")
+            self.stdout.write(f"EMAIL_PORT={port}")
+            self.stdout.write(f"EMAIL_USE_TLS={'yes' if use_tls else 'no'}")
+            self.stdout.write(f"EMAIL_USE_SSL={'yes' if use_ssl else 'no'}")
+            self.stdout.write(f"DEFAULT_FROM_EMAIL={from_email or '(unset)'}")
+            self.stdout.write(f"EMAIL_HOST_USER set: {'yes' if user_set else 'no'}")
+            self.stdout.write(f"EMAIL_HOST_PASSWORD set: {'yes' if pass_set else 'no'}")
+        except Exception:
+            self.stdout.write(self.style.WARNING("Could not compute email settings (unexpected error)."))
+
         # Summary
         self.stdout.write("")
         if failed_required:

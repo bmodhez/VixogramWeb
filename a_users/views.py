@@ -3,14 +3,25 @@ import json
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
+from django.conf import settings
+from django.utils import timezone
 from .models import Profile
 from .forms import ProfileForm
 from .forms import ReportUserForm
 from .forms import ProfilePrivacyForm
 from .forms import SupportEnquiryForm
+from .forms import UsernameChangeForm
+
+try:
+    from a_rtchat.rate_limit import check_rate_limit, get_client_ip, make_key
+except Exception:  # pragma: no cover
+    check_rate_limit = None
+    get_client_ip = None
+    make_key = None
 from django.contrib.auth.models import User
 from django.http import HttpResponse
 from django.http import JsonResponse
+from django.http import Http404
 from django.urls import reverse
 from django.core import signing
 from urllib.parse import urlencode
@@ -19,6 +30,7 @@ from django.utils.http import url_has_allowed_host_and_scheme
 from a_users.models import Follow
 from a_users.models import UserReport
 from a_users.models import SupportEnquiry
+from a_users.models import Referral
 from a_users.badges import VERIFIED_FOLLOWERS_THRESHOLD, get_verified_user_ids
 
 try:
@@ -122,6 +134,22 @@ def profile_view(request, username=None):
         'show_presence': show_presence,
         'presence_online': visible_online,
     }
+
+    # JS config for realtime presence (used by static/js/profile.js)
+    try:
+        ctx['profile_config'] = {
+            'profileUsername': getattr(profile_user, 'username', ''),
+            'isOwner': bool(is_owner),
+            'presenceOnline': bool(visible_online),
+            'presenceWsEnabled': bool(show_presence and (is_owner or not is_stealth)),
+        }
+    except Exception:
+        ctx['profile_config'] = {
+            'profileUsername': getattr(profile_user, 'username', ''),
+            'isOwner': bool(is_owner),
+            'presenceOnline': bool(visible_online),
+            'presenceWsEnabled': False,
+        }
 
     # If opened from chat (HTMX), render a lightweight modal fragment instead of a full page.
     is_htmx = (request.headers.get('HX-Request') == 'true') or (request.META.get('HTTP_HX_REQUEST') == 'true')
@@ -236,9 +264,148 @@ def invite_friends_view(request):
     except Exception:
         points = 0
 
+    verified_invites = 0
+    try:
+        verified_invites = int(
+            Referral.objects.filter(referrer=request.user, awarded_at__isnull=False).count()
+        )
+    except Exception:
+        verified_invites = 0
+
+    required_points = int(getattr(settings, 'FOUNDER_CLUB_REQUIRED_POINTS', 450) or 450)
+    required_invites = int(getattr(settings, 'FOUNDER_CLUB_REQUIRED_INVITES', 35) or 35)
+    min_age_days = int(getattr(settings, 'FOUNDER_CLUB_MIN_ACCOUNT_AGE_DAYS', 20) or 20)
+
+    now = timezone.now()
+    try:
+        account_age_days = int((now - request.user.date_joined).days)
+    except Exception:
+        account_age_days = 0
+
+    profile = getattr(request.user, 'profile', None)
+    is_founder = bool(getattr(profile, 'is_founder_club', False))
+    reapply_at = getattr(profile, 'founder_club_reapply_available_at', None)
+    can_reapply = True
+    if reapply_at:
+        try:
+            can_reapply = bool(now >= reapply_at)
+        except Exception:
+            can_reapply = True
+
+    meets_points = points >= required_points
+    meets_invites = verified_invites >= required_invites
+    meets_age = account_age_days >= min_age_days
+    can_apply = bool((not is_founder) and can_reapply and meets_points and meets_invites and meets_age)
+
     return render(request, 'a_users/invite_friends.html', {
         'invite_url': invite_url,
         'points': points,
+        'verified_invites': verified_invites,
+        'required_points': required_points,
+        'required_invites': required_invites,
+        'min_account_age_days': min_age_days,
+        'account_age_days': account_age_days,
+        'is_founder_club': is_founder,
+        'founder_reapply_at': reapply_at,
+        'founder_can_apply': can_apply,
+        'founder_meets_points': meets_points,
+        'founder_meets_invites': meets_invites,
+        'founder_meets_age': meets_age,
+    })
+
+
+@login_required
+def founder_club_apply_view(request):
+    """Apply for Founder Club once eligibility is reached."""
+    profile = getattr(request.user, 'profile', None)
+    if profile is None:
+        raise Http404()
+
+    now = timezone.now()
+    required_points = int(getattr(settings, 'FOUNDER_CLUB_REQUIRED_POINTS', 450) or 450)
+    required_invites = int(getattr(settings, 'FOUNDER_CLUB_REQUIRED_INVITES', 35) or 35)
+    min_age_days = int(getattr(settings, 'FOUNDER_CLUB_MIN_ACCOUNT_AGE_DAYS', 20) or 20)
+
+    points = int(getattr(profile, 'referral_points', 0) or 0)
+    try:
+        verified_invites = int(
+            Referral.objects.filter(referrer=request.user, awarded_at__isnull=False).count()
+        )
+    except Exception:
+        verified_invites = 0
+
+    try:
+        account_age_days = int((now - request.user.date_joined).days)
+    except Exception:
+        account_age_days = 0
+
+    meets_points = points >= required_points
+    meets_invites = verified_invites >= required_invites
+    meets_age = account_age_days >= min_age_days
+
+    reapply_at = getattr(profile, 'founder_club_reapply_available_at', None)
+    can_reapply = True
+    if reapply_at:
+        try:
+            can_reapply = bool(now >= reapply_at)
+        except Exception:
+            can_reapply = True
+
+    eligible = bool(meets_points and meets_invites and meets_age and can_reapply)
+
+    if getattr(profile, 'is_founder_club', False):
+        messages.info(request, 'Founder Club is already active on your account.')
+        return redirect('invite-friends')
+
+    if request.method == 'POST':
+        if not eligible:
+            messages.error(request, 'Not eligible for Founder Club yet.')
+            return redirect('invite-friends')
+
+        # Grant immediately when the user submits the form.
+        today = timezone.localdate()
+        profile.is_founder_club = True
+        profile.founder_club_granted_at = now
+        profile.founder_club_revoked_at = None
+        profile.founder_club_reapply_available_at = None
+        profile.founder_club_last_checked = today
+        profile.save(update_fields=[
+            'is_founder_club',
+            'founder_club_granted_at',
+            'founder_club_revoked_at',
+            'founder_club_reapply_available_at',
+            'founder_club_last_checked',
+        ])
+
+        # Log to support enquiries (best-effort) so staff has an audit trail.
+        try:
+            SupportEnquiry.objects.create(
+                user=request.user,
+                subject='Founder Club',
+                message=(
+                    f"Founder Club granted via invite rewards.\n"
+                    f"Points: {points}\n"
+                    f"Verified invites: {verified_invites}\n"
+                    f"Account age days: {account_age_days}\n"
+                ),
+                page=request.path,
+                user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:300],
+            )
+        except Exception:
+            pass
+
+        messages.success(request, 'Founder Club activated!')
+        return redirect('invite-friends')
+
+    return render(request, 'a_users/founder_club_apply.html', {
+        'points': points,
+        'verified_invites': verified_invites,
+        'required_points': required_points,
+        'required_invites': required_invites,
+        'min_account_age_days': min_age_days,
+        'account_age_days': account_age_days,
+        'eligible': eligible,
+        'reapply_at': reapply_at,
     })
 
 
@@ -409,22 +576,114 @@ def report_user_view(request, username: str):
 
 
 @login_required
+def username_availability_view(request):
+    """AJAX/JSON: check if a username is available.
+
+    Used by profile edit/settings to show a green tick or red cross.
+    """
+
+    desired = (request.GET.get('u') or '').strip()
+
+    # Basic rate limit (best-effort)
+    try:
+        if check_rate_limit and make_key and get_client_ip:
+            rl = check_rate_limit(
+                make_key('username_check', request.user.id, get_client_ip(request)),
+                limit=60,
+                period_seconds=60,
+            )
+            if not rl.allowed:
+                return JsonResponse({'available': False, 'reason': 'rate_limited'}, status=429)
+    except Exception:
+        pass
+
+    # Reuse form validation (format + uniqueness)
+    profile = None
+    try:
+        profile = request.user.profile
+    except Exception:
+        profile = None
+
+    form = UsernameChangeForm({'username': desired}, user=request.user, profile=profile)
+    can_change, next_at = form.can_change_now()
+    if not can_change:
+        msg = 'Cooldown active'
+        if next_at:
+            msg = f'You can change again after {next_at:%b %d, %Y}.'
+        return JsonResponse({'available': False, 'reason': 'cooldown', 'message': msg})
+
+    if not desired:
+        return JsonResponse({'available': False, 'reason': 'empty'})
+
+    if not form.is_valid():
+        err = ''
+        try:
+            err = form.errors.get('username', [''])[0]
+        except Exception:
+            err = 'Invalid username.'
+        return JsonResponse({'available': False, 'reason': 'invalid', 'message': str(err)})
+
+    return JsonResponse({'available': True})
+
+
+@login_required
 def profile_edit_view(request):
     profile = get_object_or_404(Profile, user=request.user)
     form = ProfileForm(instance=profile)
+    username_form = UsernameChangeForm(user=request.user, profile=profile)
     
     if request.method == 'POST':
-        form = ProfileForm(request.POST, request.FILES, instance=profile)
-        if form.is_valid():
-            form.save()
-            return redirect('profile')
+        action = (request.POST.get('action') or '').strip().lower()
+
+        if action == 'username':
+            username_form = UsernameChangeForm(request.POST, user=request.user, profile=profile)
+            can_change, next_at = username_form.can_change_now()
+            if not can_change:
+                if next_at:
+                    messages.error(request, f'You can change your username again after {next_at:%b %d, %Y}.')
+                else:
+                    messages.error(request, 'You cannot change your username right now.')
+            elif username_form.is_valid():
+                new_username = username_form.cleaned_data['username']
+                old_username = request.user.username
+
+                try:
+                    request.user.username = new_username
+                    request.user.save(update_fields=['username'])
+                    profile.username_change_count = int(getattr(profile, 'username_change_count', 0) or 0) + 1
+                    profile.username_last_changed_at = timezone.now()
+                    profile.save(update_fields=['username_change_count', 'username_last_changed_at'])
+                    messages.success(request, f'Username changed from @{old_username} to @{new_username}.')
+                    return redirect('profile')
+                except Exception:
+                    messages.error(request, 'Failed to update username. Please try again.')
+
+        else:
+            form = ProfileForm(request.POST, request.FILES, instance=profile)
+            if form.is_valid():
+                form.save()
+                return redirect('profile')
             
-    return render(request, 'a_users/profile_edit.html', {'form': form, 'profile': profile})
+    # Cooldown info for template
+    can_change, next_at = username_form.can_change_now()
+    cooldown_days = int(getattr(settings, 'USERNAME_CHANGE_COOLDOWN_DAYS', 21) or 21)
+
+    return render(request, 'a_users/profile_edit.html', {
+        'form': form,
+        'profile': profile,
+        'username_form': username_form,
+        'username_can_change': can_change,
+        'username_next_available_at': next_at,
+        'username_cooldown_days': cooldown_days,
+    })
 
 @login_required
 def profile_settings_view(request):
     profile = get_object_or_404(Profile, user=request.user)
     form = ProfilePrivacyForm(instance=profile)
+    username_form = UsernameChangeForm(user=request.user, profile=profile)
+
+    is_htmx = str(request.headers.get('HX-Request') or '').lower() == 'true'
 
     if request.method == 'POST' and (request.POST.get('action') or '').strip() == 'privacy':
         old_stealth = bool(getattr(profile, 'is_stealth', False))
@@ -451,12 +710,61 @@ def profile_settings_view(request):
             except Exception:
                 pass
 
+            # Re-render partial for HTMX autosave; otherwise redirect.
+            if is_htmx:
+                try:
+                    profile.refresh_from_db(fields=['is_private_account', 'is_stealth', 'is_dnd'])
+                except Exception:
+                    pass
+
+                resp = render(request, 'a_users/partials/profile_privacy_section.html', {
+                    'privacy_form': ProfilePrivacyForm(instance=profile),
+                    'profile': profile,
+                    'user': request.user,
+                })
+                resp['HX-Trigger'] = json.dumps({
+                    'vixo:toast': {
+                        'message': 'Settings updated.',
+                        'kind': 'success',
+                    },
+                })
+                return resp
+
             messages.success(request, 'Privacy setting updated.')
+            return redirect('profile-settings')
+
+    if request.method == 'POST' and (request.POST.get('action') or '').strip().lower() == 'username':
+        username_form = UsernameChangeForm(request.POST, user=request.user, profile=profile)
+        can_change, next_at = username_form.can_change_now()
+        if not can_change:
+            if next_at:
+                messages.error(request, f'You can change your username again after {next_at:%b %d, %Y}.')
+            else:
+                messages.error(request, 'You cannot change your username right now.')
+            return redirect('profile-settings')
+
+        if username_form.is_valid():
+            new_username = username_form.cleaned_data['username']
+            old_username = request.user.username
+
+            try:
+                request.user.username = new_username
+                request.user.save(update_fields=['username'])
+                profile.username_change_count = int(getattr(profile, 'username_change_count', 0) or 0) + 1
+                profile.username_last_changed_at = timezone.now()
+                profile.save(update_fields=['username_change_count', 'username_last_changed_at'])
+                messages.success(request, f'Username changed from @{old_username} to @{new_username}.')
+            except Exception:
+                messages.error(request, 'Failed to update username. Please try again.')
             return redirect('profile-settings')
 
     return render(request, 'a_users/profile_settings.html', {
         'privacy_form': form,
         'profile': profile,
+        'username_form': username_form,
+        'username_can_change': username_form.can_change_now()[0],
+        'username_next_available_at': username_form.can_change_now()[1],
+        'username_cooldown_days': int(getattr(settings, 'USERNAME_CHANGE_COOLDOWN_DAYS', 21) or 21),
     })
 
 
@@ -565,6 +873,76 @@ def follow_toggle_view(request, username: str):
         return resp
 
     return redirect('profile-user', username=username)
+
+
+@login_required
+def remove_follower_view(request, username: str):
+    """Remove a user from the current user's followers list."""
+    if request.method != 'POST':
+        return redirect('profile')
+
+    is_htmx = str(request.headers.get('HX-Request') or '').lower() == 'true'
+
+    target = get_object_or_404(User, username=username)
+    if target == request.user:
+        if is_htmx:
+            return HttpResponse(status=204)
+        return redirect('profile')
+
+    Follow.objects.filter(follower=target, following=request.user).delete()
+    toast_message = f'Removed @{target.username} from followers'
+
+    if is_htmx:
+        is_full = str(request.GET.get('full') or '') in {'1', 'true', 'True', 'yes'}
+
+        qs = (
+            Follow.objects
+            .filter(following=request.user)
+            .select_related('follower', 'follower__profile')
+            .order_by('-created')
+        )
+        total_count = qs.count()
+        items = list(qs[:(total_count if is_full else 5)])
+
+        follower_ids = [getattr(rel.follower, 'id', None) for rel in items]
+        verified_user_ids = get_verified_user_ids(follower_ids)
+
+        try:
+            followers_count = total_count
+            following_count = Follow.objects.filter(follower=request.user).count()
+        except Exception:
+            followers_count = None
+            following_count = None
+
+        resp = render(request, 'a_users/partials/follow_list_modal.html', {
+            'profile_user': request.user,
+            'kind': 'followers',
+            'is_owner': True,
+            'locked_reason': '',
+            'items': items,
+            'total_count': total_count,
+            'is_full': is_full,
+            'verified_user_ids': verified_user_ids,
+        })
+        try:
+            resp['HX-Trigger'] = json.dumps({
+                'followChanged': {
+                    'profile_username': request.user.username,
+                    'followers_count': followers_count,
+                    'following_count': following_count,
+                },
+                'vixo:toast': {
+                    'message': toast_message,
+                    'kind': 'success',
+                    'durationMs': 3500,
+                }
+            })
+        except Exception:
+            pass
+        return resp
+
+    messages.success(request, toast_message)
+    return redirect('profile')
 
 
 @login_required
