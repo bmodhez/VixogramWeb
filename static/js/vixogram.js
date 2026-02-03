@@ -2516,6 +2516,16 @@
         let startedAt = 0;
         let tickTimer = null;
 
+        // Hold-to-pause (desktop + mobile via Pointer Events)
+        // Also suppress the synthetic click fired after a long-press release.
+        let isPaused = false;
+        let pausedAt = 0;
+        let holdPointerId = null;
+        let holdStartedAt = 0;
+        let holdStartX = 0;
+        let holdStartY = 0;
+        let suppressClickUntil = 0;
+
         const root = document.createElement('div');
         root.id = 'vixo-story-viewer';
         root.className = 'fixed inset-0 z-[80] bg-black/95 opacity-0 transition-opacity duration-200 ease-out';
@@ -2621,6 +2631,105 @@
         const nextBtn = root.querySelector('[data-story-next]');
         const prevArrow = root.querySelector('[data-story-prev-arrow]');
         const nextArrow = root.querySelector('[data-story-next-arrow]');
+
+        try {
+          if (img) img.setAttribute('draggable', 'false');
+        } catch {}
+
+        const pausePlayback = () => {
+          if (isPaused) return;
+          isPaused = true;
+          pausedAt = Date.now();
+        };
+
+        const resumePlayback = () => {
+          if (!isPaused) return;
+          // Shift the start time forward so elapsed excludes the paused duration.
+          const delta = Date.now() - (pausedAt || Date.now());
+          startedAt += Math.max(0, delta);
+          isPaused = false;
+          pausedAt = 0;
+        };
+
+        const isInteractiveHoldIgnore = (target) => {
+          try {
+            if (!target || !target.closest) return false;
+            return !!target.closest('[data-story-menu-btn],[data-story-menu-panel],[data-story-delete-confirm],[data-story-delete-now],[data-story-delete-cancel]');
+          } catch {
+            return false;
+          }
+        };
+
+        const beginHold = (e) => {
+          try {
+            if (!e || typeof e.pointerId !== 'number') return;
+            if (holdPointerId !== null) return;
+            holdPointerId = e.pointerId;
+            holdStartedAt = Date.now();
+            holdStartX = Number(e.clientX || 0);
+            holdStartY = Number(e.clientY || 0);
+            try { root.setPointerCapture(e.pointerId); } catch {}
+            pausePlayback();
+          } catch {}
+        };
+
+        const endHold = (e) => {
+          try {
+            if (holdPointerId === null) return;
+            if (e && typeof e.pointerId === 'number' && e.pointerId !== holdPointerId) return;
+
+            // If the user held for a bit, browsers often dispatch a click on release.
+            // Suppress that click so we don't accidentally go next/prev/close.
+            const heldMs = Date.now() - (holdStartedAt || Date.now());
+            if (heldMs >= 250) {
+              suppressClickUntil = Date.now() + 450;
+            }
+
+            try { root.releasePointerCapture(holdPointerId); } catch {}
+            holdPointerId = null;
+            holdStartedAt = 0;
+            resumePlayback();
+          } catch {}
+        };
+
+        // If the pointer moves (drag), treat as not a hold-click.
+        root.addEventListener('pointermove', (e) => {
+          try {
+            if (holdPointerId === null) return;
+            if (!e || typeof e.pointerId !== 'number' || e.pointerId !== holdPointerId) return;
+            const dx = Math.abs(Number(e.clientX || 0) - holdStartX);
+            const dy = Math.abs(Number(e.clientY || 0) - holdStartY);
+            if (dx + dy >= 14) {
+              suppressClickUntil = Date.now() + 450;
+            }
+          } catch {}
+        }, true);
+
+        // Suppress click right after long-press release (capture phase).
+        root.addEventListener('click', (e) => {
+          try {
+            if (Date.now() < (suppressClickUntil || 0)) {
+              e.preventDefault();
+              e.stopPropagation();
+            }
+          } catch {}
+        }, true);
+
+        // Prevent the long-press context menu while holding a story.
+        root.addEventListener('contextmenu', (e) => {
+          try { e.preventDefault(); } catch {}
+        });
+
+        // Pause while pressed; resume on release/cancel.
+        root.addEventListener('pointerdown', (e) => {
+          try {
+            if (isInteractiveHoldIgnore(e.target)) return;
+            beginHold(e);
+          } catch {}
+        }, true);
+        root.addEventListener('pointerup', endHold, true);
+        root.addEventListener('pointercancel', endHold, true);
+        root.addEventListener('lostpointercapture', endHold, true);
 
         const segments = [];
         if (progress) {
@@ -2744,10 +2853,13 @@
         const hideDeleteConfirm = () => {
           cleanupDeleteTimers();
           try { if (deleteConfirm) deleteConfirm.classList.add('hidden'); } catch {}
+          // If the user was holding, they'll resume on release.
+          resumePlayback();
         };
 
         const showDeleteConfirm = () => {
           try { if (deleteConfirm) deleteConfirm.classList.remove('hidden'); } catch {}
+          pausePlayback();
         };
 
         const performDelete = async () => {
@@ -2861,6 +2973,11 @@
           const nextIndex = Math.max(0, Math.min(items.length - 1, i));
           index = nextIndex;
           startedAt = Date.now();
+          isPaused = false;
+          pausedAt = 0;
+          holdPointerId = null;
+          holdStartedAt = 0;
+          suppressClickUntil = 0;
 
           const item = items[index];
           if (item && item.type === 'ad') {
@@ -2895,6 +3012,7 @@
 
           cleanupTimers();
           tickTimer = window.setInterval(() => {
+            if (isPaused) return;
             const elapsed = Date.now() - startedAt;
             const pct = (elapsed / getItemDurationMs(item)) * 100;
             setSegment(index, pct);

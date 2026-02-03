@@ -1167,6 +1167,83 @@
         }
     }
 
+    let __verifyGateActive = false;
+    function applyVerifyRequiredUI(required, reason) {
+        const normalized = !!required;
+        __verifyGateActive = normalized;
+
+        const gate = document.getElementById('verify_gate');
+        const reasonEl = document.getElementById('verify_gate_reason');
+        const refreshBtn = document.getElementById('verify_gate_refresh');
+
+        const chatContainer = document.getElementById('chat_container');
+        const composerBar = document.getElementById('chat_composer_bar');
+        const form = document.getElementById('chat_message_form');
+        const input = document.getElementById('id_body');
+        const sendBtn = document.getElementById('chat_send_btn');
+        const fileInput = document.getElementById('chat_file_input');
+        const captionInput = document.getElementById('chat_file_caption');
+
+        if (reasonEl) {
+            const msg = (reason && String(reason).trim()) ? String(reason).trim() : 'Verify your email to continue chatting.';
+            reasonEl.textContent = msg;
+        }
+
+        if (gate) {
+            gate.classList.toggle('hidden', !normalized);
+        }
+
+        // Blur + dim chat area while locked.
+        if (chatContainer) {
+            chatContainer.classList.toggle('blur-sm', normalized);
+            chatContainer.classList.toggle('opacity-60', normalized);
+        }
+        if (composerBar) {
+            composerBar.classList.toggle('opacity-60', normalized);
+        }
+
+        // Disable composer controls (if present).
+        if (form) {
+            form.classList.toggle('pointer-events-none', normalized);
+        }
+        if (input) input.disabled = normalized;
+        if (fileInput) fileInput.disabled = normalized;
+        if (captionInput) captionInput.disabled = normalized;
+        if (sendBtn) {
+            sendBtn.disabled = normalized;
+            sendBtn.classList.toggle('opacity-70', normalized);
+            sendBtn.classList.toggle('cursor-not-allowed', normalized);
+        }
+
+        if (refreshBtn && !refreshBtn.__vixoBound) {
+            refreshBtn.__vixoBound = true;
+            refreshBtn.addEventListener('click', () => {
+                try { window.location.reload(); } catch {}
+            });
+        }
+    }
+
+    function showVerifyRequired(reason) {
+        applyVerifyRequiredUI(true, reason);
+        try { __popup('Verify required', (reason || 'Verify your email to continue chatting.')); } catch {}
+    }
+
+    // HTMX trigger from server
+    document.body.addEventListener('verify_required', (e) => {
+        const d = (e && e.detail) ? e.detail : {};
+        showVerifyRequired(d && d.reason ? d.reason : null);
+    });
+
+    // Initial server-rendered state
+    try {
+        const gate = document.getElementById('verify_gate');
+        if (gate && String(gate.getAttribute('data-initial') || '') === '1') {
+            showVerifyRequired('Verify your email to continue chatting.');
+        }
+    } catch {
+        // ignore
+    }
+
     // Realtime block/unblock (admin action)
     window.addEventListener('chat:block_status', (e) => {
         const d = e && e.detail ? e.detail : {};
@@ -3032,6 +3109,16 @@
         const backdrop = document.getElementById('challenge_drawer_backdrop');
         if (!openBtn || !drawer) return;
 
+        // Some chat layouts use CSS transforms that can break `position: fixed`.
+        // Ensure the drawer is attached directly to <body> so it behaves consistently.
+        try {
+            if (drawer.parentElement !== document.body) {
+                document.body.appendChild(drawer);
+            }
+        } catch {
+            // ignore
+        }
+
         const panel = document.getElementById('challenge_drawer_panel');
         let __drawerCloseTimer = null;
 
@@ -3518,6 +3605,11 @@
             if (payload.type === 'cooldown') {
                 const seconds = parseInt(payload.seconds || payload.retry_after || payload.muted_seconds || 0, 10) || 0;
                 if (seconds > 0 && typeof startSendCooldown === 'function') startSendCooldown(seconds);
+                return;
+            }
+
+            if (payload.type === 'verify_required') {
+                showVerifyRequired(payload.reason || 'Verify your email to continue chatting.');
                 return;
             }
 

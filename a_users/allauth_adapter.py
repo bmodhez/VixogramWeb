@@ -7,6 +7,7 @@ from allauth.account.adapter import DefaultAccountAdapter
 from allauth.account import adapter as allauth_adapter_module
 from django.conf import settings
 from django.contrib import messages
+from django.urls import reverse
 
 from .username_policy import validate_public_username
 
@@ -21,6 +22,36 @@ class CustomAccountAdapter(DefaultAccountAdapter):
         return username
 
     def send_mail(self, template_prefix: str, email: str, context: dict) -> None:
+        # Requirement: do NOT auto-send verification email right after signup.
+        # Users will manually request verification from the Email settings page.
+        try:
+            if bool(getattr(settings, 'ALLAUTH_SUPPRESS_SIGNUP_CONFIRMATION_EMAIL', False)):
+                prefix = (template_prefix or '').lower()
+                if 'email_confirmation' in prefix:
+                    try:
+                        request = allauth_adapter_module.context.request
+                    except Exception:
+                        request = None
+
+                    if request is not None:
+                        try:
+                            # Most reliable: resolver view name.
+                            rm = getattr(request, 'resolver_match', None)
+                            if rm and getattr(rm, 'view_name', '') == 'account_signup':
+                                return None
+                        except Exception:
+                            pass
+
+                        try:
+                            signup_path = reverse('account_signup')
+                            if str(getattr(request, 'path', '') or '').startswith(signup_path):
+                                return None
+                        except Exception:
+                            pass
+        except Exception:
+            # If anything goes wrong, do not break email sending.
+            pass
+
         # On slow networks/SMTP, sending verification mail can block the signup POST
         # long enough that users click twice (first request succeeds, second shows
         # "already exists"). Allow async email sending to keep the UX snappy.

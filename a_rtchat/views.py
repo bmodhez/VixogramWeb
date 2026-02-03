@@ -306,7 +306,7 @@ def _requires_verified_email_for_chat(user) -> bool:
         if _has_verified_email(user):
             return False
 
-        limit = int(getattr(settings, 'UNVERIFIED_CHAT_MESSAGE_LIMIT', 12))
+        limit = int(getattr(settings, 'UNVERIFIED_CHAT_MESSAGE_LIMIT', 3))
         sent = GroupMessage.objects.filter(author=user).count()
         return sent >= limit
     except Exception:
@@ -551,11 +551,12 @@ def chat_view(request, chatroom_name='public-chat'):
         # Unverified users can send a limited number of messages, then must verify.
         if _requires_verified_email_for_chat(request.user):
             messages.warning(request, 'Verify your email to continue chatting.')
-            resp = HttpResponse(
-                '<div class="text-xs text-red-400">Verify your email to continue chatting.</div>',
-                status=403,
-            )
-            resp.headers['HX-Refresh'] = 'true'
+            resp = HttpResponse('', status=200)
+            resp.headers['HX-Trigger'] = json.dumps({
+                'verify_required': {
+                    'reason': 'Verify your email to continue chatting.',
+                },
+            })
             return resp
 
         if chat_muted_seconds > 0:
@@ -762,14 +763,21 @@ def chat_view(request, chatroom_name='public-chat'):
             }).content.decode('utf-8')
 
             resp = HttpResponse(html, status=200)
-            resp.headers['HX-Trigger-After-Swap'] = json.dumps({
+            trigger = {
                 'chatFileUploaded': True,
                 'uploadCountUpdated': {
                     'used': uploads_used,
                     'limit': CHAT_UPLOAD_LIMIT_PER_ROOM,
                     'remaining': uploads_remaining,
                 },
-            })
+            }
+            # If the user just hit the unverified message limit, lock the composer immediately.
+            try:
+                if _requires_verified_email_for_chat(request.user):
+                    trigger['verify_required'] = {'reason': 'Verify your email to continue chatting.'}
+            except Exception:
+                pass
+            resp.headers['HX-Trigger-After-Swap'] = json.dumps(trigger)
             return resp
 
         # Room-wide flood protection (applies to everyone in the room).
@@ -1527,7 +1535,18 @@ def chat_view(request, chatroom_name='public-chat'):
                 'verified_user_ids': verified_user_ids,
             }).content.decode('utf-8')
 
-            return HttpResponse(html, status=200)
+            resp = HttpResponse(html, status=200)
+            # If the user just hit the unverified message limit, lock the composer immediately.
+            try:
+                if _requires_verified_email_for_chat(request.user):
+                    resp.headers['HX-Trigger-After-Swap'] = json.dumps({
+                        'verify_required': {
+                            'reason': 'Verify your email to continue chatting.',
+                        },
+                    })
+            except Exception:
+                pass
+            return resp
 
         # Invalid (e.g., empty/whitespace) message -> do nothing
         return HttpResponse('', status=204)
@@ -2293,6 +2312,21 @@ def chat_file_upload(request, chatroom_name):
     if request.method != 'POST':
         raise Http404()
 
+    # Unverified users can send a limited number of messages, then must verify.
+    # Return an HTMX trigger (no refresh) so the client can show an overlay + blur.
+    try:
+        if _requires_verified_email_for_chat(request.user):
+            messages.warning(request, 'Verify your email to continue chatting.')
+            resp = HttpResponse('', status=200)
+            resp.headers['HX-Trigger'] = json.dumps({
+                'verify_required': {
+                    'reason': 'Verify your email to continue chatting.',
+                },
+            })
+            return resp
+    except Exception:
+        pass
+
     # Uploads allowed ONLY in private code rooms (plus Showcase exception).
     if not room_allows_uploads(chat_group):
         raise Http404()
@@ -2408,7 +2442,13 @@ def chat_file_upload(request, chatroom_name):
         }).content.decode('utf-8')
         response = HttpResponse(html, status=200)
         # Fire after swap so client-side reset doesn't interfere with the DOM insertion.
-        response.headers['HX-Trigger-After-Swap'] = 'chatFileUploaded'
+        trigger = {'chatFileUploaded': True}
+        try:
+            if _requires_verified_email_for_chat(request.user):
+                trigger['verify_required'] = {'reason': 'Verify your email to continue chatting.'}
+        except Exception:
+            pass
+        response.headers['HX-Trigger-After-Swap'] = json.dumps(trigger)
         return response
 
     return redirect('chatroom', chatroom_name)

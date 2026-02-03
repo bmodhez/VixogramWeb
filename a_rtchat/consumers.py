@@ -667,11 +667,11 @@ class ChatroomConsumer(WebsocketConsumer):
 
             if not verified:
                 try:
-                    limit = int(getattr(settings, 'UNVERIFIED_CHAT_MESSAGE_LIMIT', 12))
+                    limit = int(getattr(settings, 'UNVERIFIED_CHAT_MESSAGE_LIMIT', 3))
                     sent = GroupMessage.objects.filter(author=self.user).count()
                 except Exception:
                     sent = 10**9
-                    limit = 12
+                    limit = 3
 
                 if sent >= limit:
                     try:
@@ -1024,6 +1024,23 @@ class ChatroomConsumer(WebsocketConsumer):
             group = self.chatroom,
             reply_to=reply_to,
         )
+
+        # If the user just hit the unverified message limit, notify the client immediately
+        # so it can lock the composer without requiring an extra send attempt.
+        try:
+            if not getattr(self.user, 'is_staff', False):
+                qs = getattr(self.user, 'emailaddress_set', None)
+                verified = bool(qs and qs.filter(verified=True).exists())
+                if not verified:
+                    limit = int(getattr(settings, 'UNVERIFIED_CHAT_MESSAGE_LIMIT', 3))
+                    sent = GroupMessage.objects.filter(author=self.user).count()
+                    if sent >= limit:
+                        self.send(text_data=json.dumps({
+                            'type': 'verify_required',
+                            'reason': 'Verify your email to continue chatting.',
+                        }))
+        except Exception:
+            pass
 
         # Retention: keep only the newest messages per room (best-effort)
         # Apply only to public/group chats, not private chats.
@@ -1549,13 +1566,19 @@ class OnlineStatusConsumer(WebsocketConsumer):
     def connect(self):
         self.user = _resolve_authenticated_user(self.scope.get('user'))
         if not getattr(self.user, 'is_authenticated', False):
-            self.close()
+            try:
+                self.close(code=4001)
+            except Exception:
+                self.close()
             return
         self.group_name = 'online-status'
         try:
             self.group, _ = ChatGroup.objects.get_or_create(group_name=self.group_name)
         except Exception:
-            self.close()
+            try:
+                self.close(code=1011)
+            except Exception:
+                self.close()
             return
 
         # Connection counting prevents flicker when navigating (old socket closes
@@ -1570,12 +1593,27 @@ class OnlineStatusConsumer(WebsocketConsumer):
             # Start activity window when the first tab connects.
             self._set_active_start_if_missing()
             
-        async_to_sync(self.channel_layer.group_add)(
-            self.group_name, self.channel_name
-        )
-        
-        self.accept()
-        self.online_status()
+        try:
+            async_to_sync(self.channel_layer.group_add)(
+                self.group_name, self.channel_name
+            )
+        except Exception:
+            try:
+                self.close(code=1011)
+            except Exception:
+                self.close()
+            return
+
+        try:
+            self.accept()
+        except Exception:
+            return
+
+        try:
+            self.online_status()
+        except Exception:
+            # Never crash the consumer from a presence update.
+            pass
 
     def receive(self, text_data=None, bytes_data=None):
         if not text_data:
@@ -1630,58 +1668,68 @@ class OnlineStatusConsumer(WebsocketConsumer):
         ) 
         
     def online_status_handler(self, event):
-        total_online = 0
         try:
-            total_online = self.group.users_online.count()
-        except Exception:
             total_online = 0
-        # Stealth mode: hide users who opted to appear offline.
-        stealth_ids = set()
-        try:
-            if not bool(getattr(self.user, 'is_staff', False)):
-                from a_users.models import Profile
-                stealth_ids = set(
-                    Profile.objects.filter(is_stealth=True).values_list('user_id', flat=True)
-                )
-        except Exception:
-            stealth_ids = set()
-
-        online_users = self.group.users_online.exclude(id=self.user.id)
-        if stealth_ids:
-            online_users = online_users.exclude(id__in=stealth_ids)
-
-        public_chat_users = ChatGroup.objects.get(group_name='public-chat').users_online.exclude(id=self.user.id)
-        if stealth_ids:
-            public_chat_users = public_chat_users.exclude(id__in=stealth_ids)
-        
-        my_chats = self.user.chat_groups.all()
-
-        def _has_visible_other_online(chat) -> bool:
             try:
-                qs = chat.users_online.exclude(id=self.user.id)
-                if stealth_ids:
-                    qs = qs.exclude(id__in=stealth_ids)
-                return qs.exists()
+                total_online = self.group.users_online.count()
             except Exception:
-                return False
+                total_online = 0
 
-        private_chats_with_users = [chat for chat in my_chats.filter(is_private=True) if _has_visible_other_online(chat)]
-        group_chats_with_users = [chat for chat in my_chats.filter(groupchat_name__isnull=False) if _has_visible_other_online(chat)]
-        
-        if public_chat_users or private_chats_with_users or group_chats_with_users:
-            online_in_chats = True
-        else:
-            online_in_chats = False
-        
-        context = {
-            'online_users': online_users,
-            'online_in_chats': online_in_chats,
-            'public_chat_users': public_chat_users,
-            'total_online': total_online,
-            'user': self.user
-        }
-        html = render_to_string("a_rtchat/partials/online_status.html", context=context)
-        self.send(text_data=html) 
+            # Stealth mode: hide users who opted to appear offline.
+            stealth_ids = set()
+            try:
+                if not bool(getattr(self.user, 'is_staff', False)):
+                    from a_users.models import Profile
+
+                    stealth_ids = set(
+                        Profile.objects.filter(is_stealth=True).values_list('user_id', flat=True)
+                    )
+            except Exception:
+                stealth_ids = set()
+
+            online_users = self.group.users_online.exclude(id=self.user.id)
+            if stealth_ids:
+                online_users = online_users.exclude(id__in=stealth_ids)
+
+            # Public chat group might not exist in a fresh DB; don't crash the socket.
+            public_chat_users = []
+            try:
+                public_group = ChatGroup.objects.filter(group_name='public-chat').first()
+                if public_group:
+                    public_chat_users = public_group.users_online.exclude(id=self.user.id)
+                    if stealth_ids:
+                        public_chat_users = public_chat_users.exclude(id__in=stealth_ids)
+            except Exception:
+                public_chat_users = []
+
+            my_chats = self.user.chat_groups.all()
+
+            def _has_visible_other_online(chat) -> bool:
+                try:
+                    qs = chat.users_online.exclude(id=self.user.id)
+                    if stealth_ids:
+                        qs = qs.exclude(id__in=stealth_ids)
+                    return qs.exists()
+                except Exception:
+                    return False
+
+            private_chats_with_users = [chat for chat in my_chats.filter(is_private=True) if _has_visible_other_online(chat)]
+            group_chats_with_users = [chat for chat in my_chats.filter(groupchat_name__isnull=False) if _has_visible_other_online(chat)]
+
+            online_in_chats = bool(public_chat_users or private_chats_with_users or group_chats_with_users)
+
+            context = {
+                'online_users': online_users,
+                'online_in_chats': online_in_chats,
+                'public_chat_users': public_chat_users,
+                'total_online': total_online,
+                'user': self.user
+            }
+            html = render_to_string("a_rtchat/partials/online_status.html", context=context)
+            self.send(text_data=html)
+        except Exception:
+            # Never let a render/db issue crash the online-status consumer.
+            return
 
 
 class NotificationsConsumer(WebsocketConsumer):
@@ -1694,15 +1742,28 @@ class NotificationsConsumer(WebsocketConsumer):
     def connect(self):
         self.user = _resolve_authenticated_user(self.scope.get('user'))
         if not getattr(self.user, 'is_authenticated', False):
-            self.close()
+            try:
+                self.close(code=4001)
+            except Exception:
+                self.close()
             return
 
         self.group_name = f"notify_user_{self.user.id}"
-        async_to_sync(self.channel_layer.group_add)(
-            self.group_name, self.channel_name
-        )
+        try:
+            async_to_sync(self.channel_layer.group_add)(
+                self.group_name, self.channel_name
+            )
+        except Exception:
+            try:
+                self.close(code=1011)
+            except Exception:
+                self.close()
+            return
 
-        self.accept()
+        try:
+            self.accept()
+        except Exception:
+            return
 
     def disconnect(self, close_code):
         try:

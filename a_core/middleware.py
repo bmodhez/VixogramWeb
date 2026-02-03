@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from django.conf import settings
 from django.contrib import messages
+from django.http import Http404, JsonResponse
 from django.http import HttpResponse
 from django.shortcuts import redirect
 from django.shortcuts import render
@@ -103,3 +104,61 @@ class RateLimitMiddleware:
                     return redirect(path)
 
         return self.get_response(request)
+
+
+class ForceCustom404Middleware:
+    """Always show the custom 404 page.
+
+    Django's technical 404 page is shown when DEBUG=True.
+    This middleware intercepts Http404 (including Resolver404) and returns
+    our template-based 404 response so users never see the debug screen.
+
+    For API requests we return JSON instead of HTML.
+    """
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        path = (getattr(request, 'path', '') or '')
+        accept = ''
+        try:
+            accept = str(request.headers.get('Accept') or '')
+        except Exception:
+            accept = ''
+
+        wants_json = path.startswith('/api/') or ('application/json' in accept)
+
+        def _render_404():
+            if wants_json:
+                return JsonResponse({'detail': 'Not Found'}, status=404)
+            return render(request, '404.html', status=404)
+
+        # NOTE:
+        # In DEBUG=True, Django often converts Http404 (including Resolver404) into
+        # a *technical 404 response* inside the handler, meaning the exception
+        # never reaches middleware. So we must also override 404 *responses*.
+        try:
+            response = self.get_response(request)
+        except Http404:
+            return _render_404()
+        except Exception:
+            # For non-404 exceptions, keep normal Django behavior.
+            raise
+
+        try:
+            status = int(getattr(response, 'status_code', 200) or 200)
+        except Exception:
+            status = 200
+
+        if status == 404:
+            # If this is already a JSON response, keep it.
+            try:
+                ctype = str(getattr(response, 'get', lambda _k, _d=None: _d)('Content-Type', '') or '')
+            except Exception:
+                ctype = ''
+            if 'application/json' in ctype:
+                return response
+            return _render_404()
+
+        return response

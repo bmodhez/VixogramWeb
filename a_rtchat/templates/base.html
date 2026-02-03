@@ -696,6 +696,181 @@
     </script>
     {% endif %}
 
+    {% if SHOW_LOCATION_POPUP %}
+    <div id="location-modal" class="fixed inset-0 z-[69] hidden" aria-hidden="true" role="dialog" aria-modal="true">
+        <div class="absolute inset-0 bg-black/60 vixo-modal-overlay"></div>
+        <div class="relative min-h-full flex items-center justify-center p-6 pointer-events-none">
+            <div class="w-full max-w-md pointer-events-auto vixo-modal-card">
+                <div class="relative overflow-hidden rounded-2xl border border-white/10 bg-gray-900/70 backdrop-blur shadow-2xl">
+                    <div class="absolute inset-0 bg-gradient-to-br from-emerald-600/20 via-teal-600/10 to-sky-600/20"></div>
+                    <div class="relative p-6">
+                        <div class="flex items-start justify-between gap-4">
+                            <div>
+                                <div class="text-xl font-extrabold text-white">Enable location?</div>
+                                <div class="mt-2 text-sm text-gray-200/90">We use your location to improve nearby experiences.</div>
+                                <div class="mt-1 text-xs text-gray-300/80">You can change this anytime in browser settings.</div>
+                            </div>
+                            <button
+                                type="button"
+                                id="location-skip-x"
+                                class="shrink-0 inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-white/20 text-base text-gray-100 hover:bg-white/25 transition-colors"
+                                aria-label="Close location prompt"
+                            >
+                                ×
+                            </button>
+                        </div>
+
+                        <div id="location-status" class="mt-4 text-xs text-gray-300/90 hidden"></div>
+
+                        <div class="mt-5 grid grid-cols-2 gap-2">
+                            <button
+                                type="button"
+                                id="location-skip"
+                                class="inline-flex items-center justify-center rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-semibold text-white hover:bg-white/10"
+                            >
+                                Not now
+                            </button>
+                            <button
+                                type="button"
+                                id="location-allow"
+                                class="inline-flex items-center justify-center rounded-xl bg-gradient-to-r from-emerald-500 via-teal-500 to-sky-500 hover:from-emerald-400 hover:via-teal-400 hover:to-sky-400 px-4 py-2.5 text-sm font-extrabold text-white"
+                            >
+                                Allow
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        (function () {
+            const modal = document.getElementById('location-modal');
+            if (!modal) return;
+
+            const statusEl = document.getElementById('location-status');
+            const allowBtn = document.getElementById('location-allow');
+            const skipBtn = document.getElementById('location-skip');
+            const skipX = document.getElementById('location-skip-x');
+
+            const toast = (message, kind) => {
+                try {
+                    document.body.dispatchEvent(new CustomEvent('vixo:toast', { detail: {
+                        message: String(message || ''),
+                        kind: kind || 'info',
+                        durationMs: 2600,
+                    }}));
+                } catch {}
+            };
+
+            const setStatus = (msg) => {
+                try {
+                    if (!statusEl) return;
+                    statusEl.textContent = String(msg || '');
+                    statusEl.classList.remove('hidden');
+                } catch {}
+            };
+
+            const open = () => {
+                try { modal.classList.remove('hidden'); modal.setAttribute('aria-hidden', 'false'); } catch {}
+                try { document.body.classList.add('overflow-hidden'); } catch {}
+            };
+
+            const close = () => {
+                try { modal.classList.add('hidden'); modal.setAttribute('aria-hidden', 'true'); } catch {}
+                try { document.body.classList.remove('overflow-hidden'); } catch {}
+            };
+
+            const requestLocation = () => {
+                try {
+                    if (!navigator.geolocation || typeof navigator.geolocation.getCurrentPosition !== 'function') {
+                        toast('Location not supported on this device.', 'error');
+                        close();
+                        return;
+                    }
+                } catch {
+                    toast('Location not supported on this device.', 'error');
+                    close();
+                    return;
+                }
+
+                setStatus('Requesting permission…');
+
+                try {
+                    navigator.geolocation.getCurrentPosition(
+                        function success(pos) {
+                            try {
+                                const lat = pos && pos.coords ? pos.coords.latitude : null;
+                                const lng = pos && pos.coords ? pos.coords.longitude : null;
+                                if (typeof lat === 'number' && typeof lng === 'number') {
+                                    try { window.localStorage.setItem('vixo:last_location', JSON.stringify({ lat: lat, lng: lng, t: Date.now() })); } catch {}
+                                }
+                            } catch {}
+                            toast('Location enabled.', 'success');
+                            close();
+                        },
+                        function error(err) {
+                            try {
+                                const code = err && err.code;
+                                if (code === 1) toast('Location permission denied.', 'error');
+                                else toast('Could not get location.', 'error');
+                            } catch {
+                                toast('Could not get location.', 'error');
+                            }
+                            close();
+                        },
+                        { enableHighAccuracy: false, timeout: 8000, maximumAge: 600000 }
+                    );
+                } catch {
+                    toast('Could not request location.', 'error');
+                    close();
+                }
+            };
+
+            const bind = () => {
+                if (allowBtn) allowBtn.addEventListener('click', (e) => { try { e.preventDefault(); } catch {} requestLocation(); });
+                if (skipBtn) skipBtn.addEventListener('click', (e) => { try { e.preventDefault(); } catch {} close(); });
+                if (skipX) skipX.addEventListener('click', (e) => { try { e.preventDefault(); } catch {} close(); });
+                document.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+            };
+
+            bind();
+
+            // If the welcome modal is present, wait for it to close/remove before showing location.
+            const welcome = document.getElementById('welcome-modal');
+            if (!welcome) {
+                open();
+                return;
+            }
+
+            try {
+                const mo = new MutationObserver(() => {
+                    const w = document.getElementById('welcome-modal');
+                    if (!w) {
+                        try { mo.disconnect(); } catch {}
+                        open();
+                    }
+                });
+                mo.observe(document.body, { childList: true, subtree: true });
+
+                // Fallback: in case the welcome modal gets hidden (not removed)
+                window.setTimeout(() => {
+                    try {
+                        const w2 = document.getElementById('welcome-modal');
+                        if (!w2) return;
+                        const hidden = w2.getAttribute('aria-hidden') === 'true' || w2.classList.contains('hidden') || w2.style.display === 'none';
+                        if (hidden) { try { mo.disconnect(); } catch {} open(); }
+                    } catch {}
+                }, 11000);
+            } catch {
+                // Worst case: just show it.
+                open();
+            }
+        })();
+    </script>
+    {% endif %}
+
     <!-- Footer removed (Contact lives in navbar) -->
 
     <script id="vixo-config" type="application/json">{

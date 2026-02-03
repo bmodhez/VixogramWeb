@@ -80,6 +80,36 @@ def welcome_popup(request):
         return {'SHOW_WELCOME_POPUP': False}
 
 
+def location_popup(request):
+    """Expose a one-time location permission popup flag.
+
+    Only shown on the home page right after signup.
+    Reads request.session['show_location_popup'] and clears it after consumption.
+    """
+    try:
+        # Only on the home route.
+        try:
+            rm = getattr(request, 'resolver_match', None)
+            if not rm or getattr(rm, 'view_name', '') != 'home':
+                return {'SHOW_LOCATION_POPUP': False}
+        except Exception:
+            # Fallback: best-effort path check.
+            if str(getattr(request, 'path', '') or '') != '/':
+                return {'SHOW_LOCATION_POPUP': False}
+
+        sess = getattr(request, 'session', None)
+        if not sess:
+            return {'SHOW_LOCATION_POPUP': False}
+
+        show = bool(sess.get('show_location_popup'))
+        if show:
+            sess.pop('show_location_popup', None)
+            sess.pop('location_popup_source', None)
+        return {'SHOW_LOCATION_POPUP': show}
+    except Exception:
+        return {'SHOW_LOCATION_POPUP': False}
+
+
 def site_stats(request):
     """Expose lightweight site-wide stats to templates (cached)."""
     try:

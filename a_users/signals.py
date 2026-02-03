@@ -156,6 +156,22 @@ if user_signed_up is not None:
             pass
 
 
+if user_signed_up is not None:
+    @receiver(user_signed_up)
+    def show_location_popup_on_signup(request, user, **kwargs):
+        """Ask for location permission once after signup (shown on home page)."""
+        try:
+            if request is None:
+                return
+            # Only once per signup session.
+            if request.session.get('show_location_popup'):
+                return
+            request.session['show_location_popup'] = True
+            request.session['location_popup_source'] = 'signup'
+        except Exception:
+            pass
+
+
 if django_user_logged_in is not None:
     @receiver(django_user_logged_in)
     def show_welcome_popup_on_login(request, user, **kwargs):

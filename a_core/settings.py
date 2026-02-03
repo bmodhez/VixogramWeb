@@ -310,6 +310,7 @@ MIDDLEWARE = [
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
+    'a_core.middleware.ForceCustom404Middleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'a_users.middleware.UserDeviceTrackingMiddleware',
@@ -350,6 +351,7 @@ TEMPLATES = [
                 'a_core.context_processors.site_contact',
                 'a_core.context_processors.recaptcha_config',
                 'a_core.context_processors.welcome_popup',
+                'a_core.context_processors.location_popup',
                 'a_core.context_processors.site_stats',
                 'a_users.context_processors.notifications_badge',
                 'a_users.context_processors.story_upload_gate',
@@ -533,6 +535,10 @@ CHAT_INITIAL_MESSAGES = int(os.environ.get('CHAT_INITIAL_MESSAGES', '40'))
 # Page size when the user taps "Load older".
 CHAT_HISTORY_PAGE_SIZE = int(os.environ.get('CHAT_HISTORY_PAGE_SIZE', '35'))
 
+# Email verification: unverified users are allowed a limited number of messages.
+# After this, they must verify their email to continue chatting.
+UNVERIFIED_CHAT_MESSAGE_LIMIT = int(os.environ.get('UNVERIFIED_CHAT_MESSAGE_LIMIT', '3'))
+
 # Invite points
 # Points are awarded after the referred user verifies email (see a_users.signals).
 # Default tuned so 35 verified invites ~ 450 points.
@@ -715,8 +721,14 @@ SESSION_COOKIE_AGE = int(os.environ.get('SESSION_COOKIE_AGE', '1209600'))
 # Allauth email verification (anti-spam)
 # - New users must verify email before they can use the account.
 ACCOUNT_UNIQUE_EMAIL = True
-_email_verification_default = 'mandatory' if ENVIRONMENT == 'production' else 'optional'
+# Product requirement: allow signup/login without forcing verification immediately.
+# Users can manually request verification from settings.
+_email_verification_default = 'optional'
 ACCOUNT_EMAIL_VERIFICATION = (os.getenv('ACCOUNT_EMAIL_VERIFICATION', _email_verification_default) or _email_verification_default).strip().lower()
+
+# If True, suppress the automatic verification email sent right after signup.
+# Users can still trigger email verification manually from the Email settings page.
+ALLAUTH_SUPPRESS_SIGNUP_CONFIRMATION_EMAIL = _env_bool('ALLAUTH_SUPPRESS_SIGNUP_CONFIRMATION_EMAIL', default=True)
 
 # Password reset UX/security:
 # - When True, allauth may send an "Unknown Account" email if a user attempts

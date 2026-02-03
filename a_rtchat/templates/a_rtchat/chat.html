@@ -664,11 +664,37 @@
     </div>
 </wrapper>
 
+<!-- Verify required overlay (blocks chat without page refresh) -->
+<div id="verify_gate"
+     data-initial="{% if needs_email_verification_for_chat %}1{% else %}0{% endif %}"
+     class="hidden fixed inset-0 z-[1000]">
+    <div class="absolute inset-0 bg-black/50 backdrop-blur-sm"></div>
+    <div class="relative min-h-full flex items-end sm:items-center justify-center p-3 sm:p-6">
+        <div class="w-full sm:max-w-md rounded-2xl border border-gray-800 bg-gray-900/95 backdrop-blur-sm shadow-2xl overflow-hidden">
+            <div class="p-4 border-b border-gray-800/50">
+                <div class="text-base font-semibold text-emerald-200">Verify to continue</div>
+                <div id="verify_gate_reason" class="mt-1 text-xs text-gray-300">Verify your email to continue chatting.</div>
+            </div>
+            <div class="p-4">
+                <div class="text-xs text-gray-400">Once verified, come back and refresh this chat.</div>
+                <div class="mt-4 flex items-center gap-2">
+                    <a href="{% url 'profile-settings' %}" class="inline-flex items-center justify-center rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 text-sm font-semibold transition">
+                        Verify now
+                    </a>
+                    <button type="button" id="verify_gate_refresh" class="inline-flex items-center justify-center rounded-xl bg-gray-800 hover:bg-gray-700 text-gray-100 px-4 py-2 text-sm font-semibold transition">
+                        Refresh
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
 {% if chat_group.is_private and not chat_blocked %}
     <!-- Challenge drawer overlay (kept near end of DOM to avoid stacking-context clashes) -->
-    <div id="challenge_drawer" class="fixed inset-0 z-[80] flex items-end sm:items-center justify-center p-3 sm:p-6 transition-opacity duration-200 ease-out opacity-0 pointer-events-none">
+    <div id="challenge_drawer" class="fixed inset-0 z-[999] flex items-end sm:items-center justify-center p-3 sm:p-6 transition-opacity duration-200 ease-out opacity-0 pointer-events-none">
         <div id="challenge_drawer_backdrop" class="absolute inset-0 bg-black/40 transition-opacity duration-200 ease-out opacity-0"></div>
-        <div id="challenge_drawer_panel" class="relative w-full sm:max-w-md rounded-2xl border border-gray-800 bg-gray-900/95 backdrop-blur-sm shadow-2xl overflow-hidden
+        <div id="challenge_drawer_panel" class="relative w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl border border-gray-800 bg-gray-900/95 backdrop-blur-sm shadow-2xl overflow-hidden
                 max-h-[78vh] sm:max-h-[85vh] flex flex-col
                 transform transition duration-200 ease-out
                 translate-y-8 sm:translate-y-2 sm:scale-95 opacity-0">
@@ -677,7 +703,6 @@
                 <div class="min-w-0">
                     <div class="text-base font-semibold text-emerald-200">Start a Challenge</div>
                     <div class="mt-0.5 text-[11px] text-gray-400">30 seconds, realtime judging</div>
-                </div>
                 </div>
                 <button type="button" id="challenge_drawer_close"
                         class="h-8 w-8 rounded-lg bg-gray-800/60 hover:bg-gray-800 text-gray-300 hover:text-gray-100 flex items-center justify-center transition-colors flex-shrink-0"
